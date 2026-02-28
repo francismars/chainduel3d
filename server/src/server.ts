@@ -1,0 +1,369 @@
+import express from 'express';
+import { WebSocketServer, WebSocket } from 'ws';
+import http from 'http';
+import dotenv from 'dotenv';
+import { SessionManager } from './session';
+import { LNBitsClient } from './lnbits';
+import { EscrowManager } from './escrow';
+import { RoomManager } from './room';
+import { RaceAuthority } from './race-authority';
+import { TrackCatalog } from './tracks';
+import type { ChainClass, RoomClientMessage, RoomServerMessage, StartRoomRequest, TrackCustomLayout } from '../../shared/types';
+
+type JoinRoomRequest = { code: string; name: string };
+
+dotenv.config();
+
+const PORT = parseInt(process.env.PORT || '3333');
+
+const app = express();
+app.use(express.json());
+
+// LNBits client
+const lnbits = new LNBitsClient({
+  url: process.env.LNBITS_URL || 'https://legend.lnbits.com',
+  adminKey: process.env.LNBITS_ADMIN_KEY || '',
+  invoiceKey: process.env.LNBITS_INVOICE_KEY || '',
+});
+
+const sessions = new SessionManager();
+const escrow = new EscrowManager(lnbits, sessions);
+const rooms = new RoomManager();
+const tracks = new TrackCatalog();
+const TRACK_ADMIN_SECRET = process.env.TRACK_ADMIN_SECRET || '';
+if (!TRACK_ADMIN_SECRET) {
+  console.warn('[admin] TRACK_ADMIN_SECRET is not set; admin track endpoints are disabled.');
+}
+
+// --- REST API ---
+
+app.post('/api/sessions', async (req, res) => {
+  try {
+    const { wagerAmount, playerNames } = req.body;
+
+    if (!wagerAmount || !playerNames || playerNames.length !== 2) {
+      res.status(400).json({ error: 'Invalid request' });
+      return;
+    }
+
+    const session = sessions.create(wagerAmount, playerNames);
+
+    try {
+      const invoices = await escrow.createDeposits(session.id);
+      res.json({ sessionId: session.id, invoices });
+    } catch (err) {
+      // LNBits might not be configured; return session anyway
+      console.error('LNBits error:', err);
+      res.json({
+        sessionId: session.id,
+        invoices: {
+          player1: { bolt11: 'lnbits_not_configured', paymentHash: 'n/a' },
+          player2: { bolt11: 'lnbits_not_configured', paymentHash: 'n/a' },
+        },
+      });
+    }
+  } catch (err) {
+    console.error('Session creation error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/sessions/:id', (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  res.json({ session });
+});
+
+app.post('/api/sessions/:id/result', async (req, res) => {
+  try {
+    const { winnerId } = req.body;
+    const session = sessions.get(req.params.id);
+
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    try {
+      const payout = await escrow.processWinnerPayout(session.id, winnerId);
+      res.json(payout);
+    } catch {
+      sessions.setWinner(session.id, winnerId);
+      sessions.setStatus(session.id, 'finished');
+      res.json({
+        lnurl: null,
+        amount: session.wagerAmount * 2 * (1 - 0.05),
+      });
+    }
+  } catch (err) {
+    console.error('Result processing error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/rooms', (req, res) => {
+  try {
+    const hostName = String(req.body?.hostName || 'Host');
+    const settings = req.body?.settings ?? {};
+    const spectatorHost = !!req.body?.spectatorHost;
+    const created = rooms.create({
+      hostName,
+      settings: {
+        laps: settings.laps ?? 3,
+        aiCount: settings.aiCount ?? 3,
+        maxHumans: 4,
+        chainClasses: Array.isArray(settings.chainClasses) ? settings.chainClasses.slice(0, 4) : ['balanced', 'balanced', 'balanced', 'balanced'],
+        trackId: typeof settings.trackId === 'string' ? settings.trackId : 'default',
+      },
+      spectatorHost,
+    });
+    res.json(created);
+  } catch (err) {
+    console.error('Room create error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/rooms/join', (req, res) => {
+  try {
+    const body = req.body as JoinRoomRequest;
+    if (!body?.code || !body?.name) {
+      res.status(400).json({ error: 'Missing code or name' });
+      return;
+    }
+    const joined = rooms.joinByCode(body.code, body.name);
+    res.json(joined);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Join failed' });
+  }
+});
+
+app.get('/api/rooms/:roomId', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: 'Room not found' });
+    return;
+  }
+  res.json({ room });
+});
+
+app.post('/api/rooms/:roomId/settings', (req, res) => {
+  try {
+    const body = req.body as StartRoomRequest & { settings?: { laps?: number; aiCount?: number; chainClasses?: ChainClass[]; trackId?: string } };
+    const room = rooms.patchSettings(
+      req.params.roomId,
+      body.memberId,
+      body.memberToken,
+      body.settings ?? {},
+    );
+    broadcastRoomState(room.roomId);
+    res.json({ room });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Patch settings failed' });
+  }
+});
+
+app.post('/api/rooms/:roomId/start', (req, res) => {
+  try {
+    const body = req.body as StartRoomRequest;
+    const roomState = rooms.get(req.params.roomId);
+    const selectedTrackId = body.trackId ?? roomState?.settings.trackId ?? 'default';
+    let resolvedLayout: TrackCustomLayout | null = body.trackLayout ?? null;
+    if (selectedTrackId) {
+      const selected = tracks.get(selectedTrackId);
+      if (!selected) {
+        res.status(400).json({ error: 'Track not found' });
+        return;
+      }
+      resolvedLayout = selected.layout;
+    }
+    const room = rooms.startRace(
+      req.params.roomId,
+      body.memberId,
+      body.memberToken,
+      resolvedLayout,
+      selectedTrackId,
+    );
+    broadcastRoomState(room.roomId);
+    res.json({ room });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Start failed' });
+  }
+});
+
+app.get('/api/tracks', (_req, res) => {
+  res.json({ tracks: tracks.list() });
+});
+
+app.get('/api/tracks/:trackId', (req, res) => {
+  const track = tracks.get(req.params.trackId);
+  if (!track) {
+    res.status(404).json({ error: 'Track not found' });
+    return;
+  }
+  res.json({ track });
+});
+
+app.post('/api/admin/tracks', (req, res) => {
+  if (!isAdminAuthorized(req)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  const name = String(req.body?.name || '').trim();
+  const layout = (req.body?.layout ?? null) as TrackCustomLayout | null;
+  const id = typeof req.body?.id === 'string' ? req.body.id : undefined;
+  if (!name) {
+    res.status(400).json({ error: 'Missing track name' });
+    return;
+  }
+  const track = tracks.upsert({ id, name, layout });
+  res.json({ track });
+});
+
+app.put('/api/admin/tracks/:trackId', (req, res) => {
+  if (!isAdminAuthorized(req)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  const existing = tracks.get(req.params.trackId);
+  if (!existing) {
+    res.status(404).json({ error: 'Track not found' });
+    return;
+  }
+  const name = String(req.body?.name || existing.name).trim();
+  const layout = (req.body?.layout ?? existing.layout ?? null) as TrackCustomLayout | null;
+  const track = tracks.upsert({ id: req.params.trackId, name, layout });
+  res.json({ track });
+});
+
+app.delete('/api/admin/tracks/:trackId', (req, res) => {
+  if (!isAdminAuthorized(req)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  if (!tracks.remove(req.params.trackId)) {
+    res.status(400).json({ error: 'Cannot delete track' });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+// --- WebSocket for real-time updates ---
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+const raceAuthority = new RaceAuthority(rooms, (roomId, race) => {
+  broadcastRoomState(roomId);
+  const snapshot = rooms.getAuthoritativeSnapshot(roomId);
+  if (snapshot) {
+    broadcastToRoom(roomId, {
+      type: 'race_snapshot',
+      roomId,
+      snapshot,
+    });
+  }
+});
+raceAuthority.start();
+
+const wsRoom = new Map<WebSocket, { roomId: string; memberId: string; memberToken: string }>();
+
+wss.on('connection', (ws: WebSocket) => {
+  ws.on('message', (data: Buffer) => {
+    try {
+      const msg = JSON.parse(data.toString()) as RoomClientMessage;
+      if (msg.type === 'subscribe' && msg.sessionId) {
+        (ws as any).sessionId = msg.sessionId;
+        return;
+      }
+
+      if (msg.type === 'room_subscribe') {
+        if (!rooms.validateMember(msg.roomId, msg.memberId, msg.memberToken)) {
+          send(ws, { type: 'error', message: 'Unauthorized room member' });
+          return;
+        }
+        wsRoom.set(ws, {
+          roomId: msg.roomId,
+          memberId: msg.memberId,
+          memberToken: msg.memberToken,
+        });
+        rooms.markConnected(msg.roomId, msg.memberId);
+        broadcastRoomState(msg.roomId);
+        return;
+      }
+
+      if (msg.type === 'room_chat_send') {
+        const chat = rooms.addChat(msg.roomId, msg.memberId, msg.memberToken, msg.text);
+        broadcastToRoom(msg.roomId, { type: 'chat_message', roomId: msg.roomId, message: chat });
+        return;
+      }
+
+      if (msg.type === 'room_leave') {
+        const room = rooms.leave(msg.roomId, msg.memberId, msg.memberToken);
+        wsRoom.delete(ws);
+        if (room) broadcastRoomState(room.roomId);
+        return;
+      }
+
+      if (msg.type === 'race_input') {
+        rooms.setRaceInput(msg.roomId, msg.memberId, msg.memberToken, msg.input);
+        return;
+      }
+    } catch { /* ignore malformed messages */ }
+  });
+
+  ws.on('close', () => {
+    const sub = wsRoom.get(ws);
+    if (!sub) return;
+    rooms.markDisconnected(sub.roomId, sub.memberId);
+    wsRoom.delete(ws);
+    broadcastRoomState(sub.roomId);
+  });
+});
+
+// Broadcast session updates
+setInterval(() => {
+  wss.clients.forEach((client) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    const sessionId = (client as any).sessionId;
+    if (!sessionId) return;
+
+    const session = sessions.get(sessionId);
+    if (session) {
+      client.send(JSON.stringify({ type: 'session_update', session }));
+    }
+  });
+}, 2000);
+
+function send(ws: WebSocket, payload: RoomServerMessage) {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify(payload));
+}
+
+function broadcastToRoom(roomId: string, payload: RoomServerMessage) {
+  wss.clients.forEach(client => {
+    const sub = wsRoom.get(client);
+    if (!sub || sub.roomId !== roomId) return;
+    send(client, payload);
+  });
+}
+
+function broadcastRoomState(roomId: string) {
+  const room = rooms.getState(roomId);
+  if (!room) return;
+  broadcastToRoom(roomId, { type: 'room_state', room });
+}
+
+function isAdminAuthorized(req: express.Request): boolean {
+  if (!TRACK_ADMIN_SECRET) return false;
+  const secret = String(req.header('x-admin-secret') || '');
+  return secret === TRACK_ADMIN_SECRET;
+}
+
+server.listen(PORT, () => {
+  console.log(`BlockKart server running on port ${PORT}`);
+  console.log(`LNBits URL: ${process.env.LNBITS_URL || 'not configured'}`);
+});
