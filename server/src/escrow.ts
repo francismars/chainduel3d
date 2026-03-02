@@ -1,7 +1,8 @@
 import { LNBitsClient } from './lnbits';
 import { SessionManager } from './session';
+const parsedRevenueSplit = Number.parseInt(process.env.REVENUE_SPLIT_PERCENT || '5', 10);
 const GAME_CONFIG = {
-  REVENUE_SPLIT_PERCENT: 5,
+  REVENUE_SPLIT_PERCENT: Number.isFinite(parsedRevenueSplit) ? parsedRevenueSplit : 5,
 } as const;
 
 export class EscrowManager {

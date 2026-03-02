@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+npm-debug.log
+dist
+**/dist
+.git
+.gitignore
+.cursor
+terminals
+coverage
+*.local
+server/.env
+server/.env.*
+!server/.env.example
+!server/.env.production.example

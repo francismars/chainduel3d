@@ -2,6 +2,8 @@ import express from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { SessionManager } from './session';
 import { LNBitsClient } from './lnbits';
 import { EscrowManager } from './escrow';
@@ -15,9 +17,22 @@ type JoinRoomRequest = { code: string; name: string };
 dotenv.config();
 
 const PORT = parseInt(process.env.PORT || '3000');
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PRODUCTION = NODE_ENV === 'production';
 
 const app = express();
-app.use(express.json());
+app.use(helmet());
+app.use(express.json({ limit: '100kb' }));
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+const adminRateLimiter = rateLimit({
+  windowMs: 60_000,
+  max: IS_PRODUCTION ? 60 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many admin requests, please retry later.' },
+});
 
 // LNBits client
 const lnbits = new LNBitsClient({
@@ -35,7 +50,25 @@ if (!ROUTE_ADMIN_SECRET) {
   console.warn('[admin] ROUTE_ADMIN_SECRET is not set; admin route endpoints are disabled.');
 }
 
+if (IS_PRODUCTION) {
+  const requiredEnv = ['LNBITS_URL', 'LNBITS_ADMIN_KEY', 'LNBITS_INVOICE_KEY', 'ROUTE_ADMIN_SECRET', 'REVENUE_SPLIT_PERCENT'];
+  const missing = requiredEnv.filter((key) => !process.env[key] || String(process.env[key]).trim().length === 0);
+  if (missing.length > 0) {
+    console.error(`[startup] Missing required production env vars: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+
 // --- REST API ---
+
+app.get('/health', (_req, res) => {
+  res.json({
+    ok: true,
+    uptimeSec: Math.floor(process.uptime()),
+    env: NODE_ENV,
+    timestamp: new Date().toISOString(),
+  });
+});
 
 app.post('/api/sessions', async (req, res) => {
   try {
@@ -212,6 +245,8 @@ app.get('/api/routes/:routeId', (req, res) => {
   res.json({ route });
 });
 
+app.use('/api/admin/routes', adminRateLimiter);
+
 app.post('/api/admin/routes', (req, res) => {
   if (!isAdminAuthorized(req)) {
     res.status(401).json({ error: 'Unauthorized' });
@@ -338,7 +373,7 @@ wss.on('connection', (ws: WebSocket) => {
 });
 
 // Broadcast session updates
-setInterval(() => {
+const sessionBroadcastInterval = setInterval(() => {
   wss.clients.forEach((client) => {
     if (client.readyState !== WebSocket.OPEN) return;
     const sessionId = (client as any).sessionId;
@@ -400,3 +435,29 @@ server.listen(PORT, () => {
   console.log(`CHAINDUEL3D server running on port ${PORT}`);
   console.log(`LNBits URL: ${process.env.LNBITS_URL || 'not configured'}`);
 });
+
+function shutdown(signal: string) {
+  console.log(`[shutdown] Received ${signal}, draining server...`);
+  clearInterval(sessionBroadcastInterval);
+  raceAuthority.stop();
+  wss.clients.forEach((client) => {
+    try {
+      client.close(1001, 'Server shutting down');
+    } catch {
+      // ignore close errors
+    }
+  });
+  wss.close(() => {
+    server.close((err) => {
+      if (err) {
+        console.error('[shutdown] HTTP close failed:', err);
+        process.exit(1);
+      }
+      console.log('[shutdown] Complete');
+      process.exit(0);
+    });
+  });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

@@ -61,3 +61,9 @@ chainduel3d/
   server/          # Backend (Express + LNBits)
   shared/          # Shared TypeScript types
 ```
+
+## Production Deployment
+
+Single-VM production deployment artifacts (Docker, Nginx, CI/CD, staging checks, rollback) are documented in:
+
+- `docs/production-runbook.md`
