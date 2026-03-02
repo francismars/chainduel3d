@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import sim from '../../shared/sim';
 import type { SimInput, SimPlayerRuntimeState, SimRaceEvent, SimRandomState } from '../../shared/sim';
+import type { GameMode } from '../../shared/types';
 
 const {
   createDefaultRuntimeState,
@@ -14,8 +15,8 @@ const {
   stepStealCollisions: stepSharedStealCollisions,
   buildSimCheckpoints: buildSharedSimCheckpoints,
   buildSimItemBoxes: buildSharedSimItemBoxes,
-  buildSimMainTrackPoints: buildSharedSimMainTrackPoints,
-  buildSimTrackPoints: buildSharedSimTrackPoints,
+  buildSimMainRoutePoints: buildSharedSimMainRoutePoints,
+  buildSimRoutePoints: buildSharedSimRoutePoints,
   buildSimStartFrame: buildSharedStartFrame,
   buildSimStartSlotPose: buildSharedStartSlotPose,
   rollPreviewItem: rollSharedPreviewItem,
@@ -35,7 +36,8 @@ export interface RoomSettings {
   aiCount: number;
   maxHumans: number;
   chainClasses: Array<'balanced' | 'light' | 'heavy'>;
-  trackId: string;
+  routeId: string;
+  mode?: GameMode;
 }
 
 export interface RoomMember {
@@ -66,7 +68,7 @@ export interface OnlineRaceInput {
   sacrificeBoost: boolean;
 }
 
-export interface TrackControlPoint {
+export interface RouteControlPoint {
   x: number;
   z: number;
   w: number;
@@ -74,17 +76,41 @@ export interface TrackControlPoint {
   ramp?: boolean;
   bridge?: boolean;
   noRails?: boolean;
+  boost?: boolean;
+  loop?: boolean;
+  tunnel?: boolean;
+  tunnelWall?: boolean;
+  tunnelWallSide?: 'bottom' | 'left' | 'right';
 }
 
-export interface TrackShortcutControlPoint {
+export interface RouteShortcutControlPoint {
   x: number;
   z: number;
   e: number;
 }
 
-export interface TrackCustomLayout {
-  main: TrackControlPoint[];
-  shortcut?: TrackShortcutControlPoint[];
+type RouteLayoutType = 'loop' | 'arena';
+type RouteArenaShape = 'circle' | 'rounded_rect';
+
+interface RouteArenaObstacle {
+  x: number;
+  z: number;
+  radius: number;
+  height?: number;
+}
+
+export interface RouteCustomLayout {
+  main: RouteControlPoint[];
+  shortcut?: RouteShortcutControlPoint[];
+  layoutType?: RouteLayoutType;
+  arenaShape?: RouteArenaShape;
+  arenaRadiusX?: number;
+  arenaRadiusZ?: number;
+  arenaFloorY?: number;
+  arenaWallHeight?: number;
+  arenaObstacleDensity?: number;
+  interiorObstacles?: RouteArenaObstacle[];
+  showCenterpiece?: boolean;
 }
 
 export interface RoomState {
@@ -99,8 +125,9 @@ export interface RoomState {
   race?: {
     startedAt: number;
     tick: number;
-    trackId?: string;
-    trackLayout?: TrackCustomLayout | null;
+    mode?: GameMode;
+    routeId?: string;
+    routeLayout?: RouteCustomLayout | null;
     standings?: RaceStandings;
     finishedAt?: number;
   };
@@ -109,6 +136,8 @@ export interface RoomState {
 interface RaceStandings {
   placementOrder: number[];
   rankByPlayer: number[];
+  survivors?: number;
+  eliminatedOrder?: number[];
 }
 
 interface CreateRoomRequest {
@@ -133,13 +162,14 @@ interface InternalRoom {
   race?: {
     startedAt: number;
     tick: number;
+    mode: GameMode;
     playerInputs: Array<OnlineRaceInput | null>;
-    trackId?: string;
-    trackLayout?: TrackCustomLayout | null;
+    routeId?: string;
+    routeLayout?: RouteCustomLayout | null;
     standings?: RaceStandings;
     simSlots: boolean[];
-    simMainTrackPoints: SimTrackPoint[];
-    simTrackPoints: SimTrackPoint[];
+    simMainTrackPoints: SimRoutePoint[];
+    simTrackPoints: SimRoutePoint[];
     simCheckpoints: SimCheckpoint[];
     itemBoxes: SimItemBox[];
     obstacles: SimObstacle[];
@@ -149,6 +179,7 @@ interface InternalRoom {
     runtime: SimPlayerRuntime[];
     authoritative?: {
       tick: number;
+      mode: GameMode;
       players: Array<{
         x: number; y: number; z: number;
         qx: number; qy: number; qz: number; qw: number;
@@ -182,7 +213,7 @@ interface InternalRoom {
   };
 }
 
-interface SimTrackPoint {
+interface SimRoutePoint {
   x: number;
   y: number;
   z: number;
@@ -190,6 +221,11 @@ interface SimTrackPoint {
   dirZ: number;
   width: number;
   ramp: boolean;
+  boost: boolean;
+  loop: boolean;
+  tunnel: boolean;
+  tunnelWall: boolean;
+  tunnelWallSide: 'bottom' | 'left' | 'right';
 }
 
 interface SimCheckpoint {
@@ -228,14 +264,14 @@ export class RoomManager {
   private readonly sacrificeBoostCooldownMs = 2200;
   private readonly sacrificeBoostDurationMs = 1700;
   private readonly headToBodyHitDistance = 1.0;
-  private readonly maxBlocks = 12;
+  private readonly defaultMaxBlocks = 12;
   private readonly startBlocks = 5;
   private readonly segmentSpacing = 0.88;
   private rooms = new Map<string, InternalRoom>();
   private codeToRoomId = new Map<string, string>();
-  private readonly defaultSimMainTrackPoints: SimTrackPoint[] = buildSharedSimMainTrackPoints(null);
-  private readonly defaultSimTrackPoints: SimTrackPoint[] = buildSharedSimTrackPoints(null, this.defaultSimMainTrackPoints);
-  private readonly defaultSimCheckpoints: SimCheckpoint[] = buildSharedSimCheckpoints(this.defaultSimMainTrackPoints);
+  private readonly defaultSimMainRoutePoints: SimRoutePoint[] = buildSharedSimMainRoutePoints(null);
+  private readonly defaultSimRoutePoints: SimRoutePoint[] = buildSharedSimRoutePoints(null, this.defaultSimMainRoutePoints);
+  private readonly defaultSimCheckpoints: SimCheckpoint[] = buildSharedSimCheckpoints(this.defaultSimMainRoutePoints);
 
   create(req: CreateRoomRequest): { room: RoomState; memberId: string; memberToken: string } {
     const roomId = uuidv4();
@@ -248,9 +284,10 @@ export class RoomManager {
       aiCount: Math.max(0, Math.min(4, Math.round(req.settings?.aiCount ?? 3))),
       maxHumans: 4,
       chainClasses: this.sanitizeChainClasses(req.settings?.chainClasses),
-      trackId: typeof req.settings?.trackId === 'string' && req.settings.trackId.trim()
-        ? req.settings.trackId.trim()
+      routeId: typeof req.settings?.routeId === 'string' && req.settings.routeId.trim()
+        ? req.settings.routeId.trim()
         : 'default',
+      mode: this.sanitizeMode(req.settings?.mode),
     };
     const room: InternalRoom = {
       roomId,
@@ -316,9 +353,10 @@ export class RoomManager {
       aiCount: Math.max(0, Math.min(4, Math.round(settings.aiCount ?? room.settings.aiCount))),
       maxHumans: room.settings.maxHumans,
       chainClasses: this.sanitizeChainClasses(settings.chainClasses ?? room.settings.chainClasses),
-      trackId: typeof settings.trackId === 'string' && settings.trackId.trim()
-        ? settings.trackId.trim()
-        : room.settings.trackId,
+      routeId: typeof settings.routeId === 'string' && settings.routeId.trim()
+        ? settings.routeId.trim()
+        : room.settings.routeId,
+      mode: this.sanitizeMode(settings.mode ?? room.settings.mode),
     };
     return this.toState(room);
   }
@@ -327,31 +365,37 @@ export class RoomManager {
     roomId: string,
     memberId: string,
     token: string,
-    trackLayout: TrackCustomLayout | null = null,
-    trackId?: string,
+    routeLayout: RouteCustomLayout | null = null,
+    routeId?: string,
   ): RoomState {
     const room = this.getInternalValidated(roomId, memberId, token);
     if (room.hostMemberId !== memberId) throw new Error('Only host can start');
     if (room.phase !== 'lobby') throw new Error('Race already started');
     const simSlots = this.computeSimSlots(room);
-    const sanitizedLayout = this.sanitizeTrackLayout(trackLayout);
+    const sanitizedLayout = this.sanitizeRouteLayout(routeLayout);
     const rngState = createSimRandomState((this.hashString(room.roomId) ^ Date.now()) >>> 0);
-    const simMainTrackPoints = buildSharedSimMainTrackPoints(sanitizedLayout as any);
-    const simTrackPoints = buildSharedSimTrackPoints(sanitizedLayout as any, simMainTrackPoints);
-    const simCheckpoints = buildSharedSimCheckpoints(simMainTrackPoints);
-    const simItemBoxes = buildSharedSimItemBoxes(simMainTrackPoints, 10, () => rollSharedPreviewItem(() => nextSimRandom(rngState)));
-    const players = this.createStartPlayers(simSlots, room.settings.laps, simMainTrackPoints);
+    const simMainRoutePoints = buildSharedSimMainRoutePoints(sanitizedLayout as any);
+    const simRoutePoints = buildSharedSimRoutePoints(sanitizedLayout as any, simMainRoutePoints);
+    const simCheckpoints = buildSharedSimCheckpoints(simMainRoutePoints, 14, sanitizedLayout as any);
+    const simItemBoxes = buildSharedSimItemBoxes(
+      simMainRoutePoints,
+      10,
+      () => rollSharedPreviewItem(() => nextSimRandom(rngState)),
+      sanitizedLayout as any,
+    );
+    const players = this.createStartPlayers(simSlots, room.settings.laps, simMainRoutePoints, sanitizedLayout);
     room.phase = 'countdown';
     room.race = {
       startedAt: Date.now() + this.countdownMs,
       tick: 0,
+      mode: this.sanitizeMode(room.settings.mode),
       playerInputs: Array.from({ length: room.settings.maxHumans }, () => null),
-      trackId: trackId ?? room.settings.trackId ?? 'default',
-      trackLayout: sanitizedLayout,
-      standings: this.makeStandings([0, 1, 2, 3]),
+      routeId: routeId ?? room.settings.routeId ?? 'default',
+      routeLayout: sanitizedLayout,
+      standings: this.makeStandings([0, 1, 2, 3], players),
       simSlots,
-      simMainTrackPoints,
-      simTrackPoints,
+      simMainTrackPoints: simMainRoutePoints,
+      simTrackPoints: simRoutePoints,
       simCheckpoints,
       itemBoxes: simItemBoxes,
       obstacles: [],
@@ -366,6 +410,7 @@ export class RoomManager {
       })),
       authoritative: {
         tick: 0,
+        mode: this.sanitizeMode(room.settings.mode),
         players,
         itemBoxes: simItemBoxes.map(b => ({
           x: b.x,
@@ -374,7 +419,7 @@ export class RoomManager {
           active: b.active,
           previewItem: b.previewItem,
         })),
-        standings: this.makeStandings([0, 1, 2, 3]),
+        standings: this.makeStandings([0, 1, 2, 3], players),
         events: [],
         at: Date.now(),
       },
@@ -454,12 +499,19 @@ export class RoomManager {
     room.race.tick += 1;
     this.stepAuthoritativeRace(room, dtSec);
     const activePlayers = (room.race.authoritative?.players ?? []).filter((_, i) => !!room.race?.simSlots[i]);
-    const raceShouldEnd = shouldSharedEndRace(activePlayers as Array<{ finished: boolean; eliminated: boolean }>, 3);
+    const raceShouldEnd = shouldSharedEndRace(
+      activePlayers as Array<{ finished: boolean; eliminated: boolean }>,
+      3,
+      room.race.mode,
+      room.race.tick * dtSec * 1000,
+    );
     room.race.standings = this.makeStandings(
       computeSharedPlacements(
         room.race.authoritative?.players ?? [],
         room.race.simCheckpoints.length || 14,
+        room.race.mode,
       ),
+      room.race.authoritative?.players ?? [],
     );
     if (raceShouldEnd) {
       room.phase = 'finished';
@@ -487,6 +539,7 @@ export class RoomManager {
     const auth = room.race.authoritative;
     return {
       tick: auth.tick,
+      mode: auth.mode,
       players: auth.players.map(p => ({ ...p })),
       itemBoxes: auth.itemBoxes?.map(b => ({ ...b })),
       obstacles: room.race.obstacles?.map(o => ({
@@ -498,6 +551,8 @@ export class RoomManager {
       standings: auth.standings ? {
         placementOrder: [...auth.standings.placementOrder],
         rankByPlayer: [...auth.standings.rankByPlayer],
+        survivors: auth.standings.survivors,
+        eliminatedOrder: auth.standings.eliminatedOrder ? [...auth.standings.eliminatedOrder] : undefined,
       } : undefined,
       events: auth.events?.map(e => ({ ...e })),
       at: auth.at,
@@ -538,14 +593,26 @@ export class RoomManager {
       race: room.race ? {
         startedAt: room.race.startedAt,
         tick: room.race.tick,
-        trackId: room.race.trackId,
-        trackLayout: room.race.trackLayout ? {
-          main: room.race.trackLayout.main.map(cp => ({ ...cp })),
-          shortcut: room.race.trackLayout.shortcut?.map(cp => ({ ...cp })),
+        mode: room.race.mode,
+        routeId: room.race.routeId,
+        routeLayout: room.race.routeLayout ? {
+          main: room.race.routeLayout.main.map(cp => ({ ...cp })),
+          shortcut: room.race.routeLayout.shortcut?.map(cp => ({ ...cp })),
+          layoutType: room.race.routeLayout.layoutType === 'arena' ? 'arena' : 'loop',
+          arenaShape: room.race.routeLayout.arenaShape ?? 'circle',
+          arenaRadiusX: room.race.routeLayout.arenaRadiusX,
+          arenaRadiusZ: room.race.routeLayout.arenaRadiusZ,
+          arenaFloorY: room.race.routeLayout.arenaFloorY,
+          arenaWallHeight: room.race.routeLayout.arenaWallHeight,
+          arenaObstacleDensity: room.race.routeLayout.arenaObstacleDensity,
+          interiorObstacles: room.race.routeLayout.interiorObstacles?.map(o => ({ ...o })),
+          showCenterpiece: room.race.routeLayout.showCenterpiece !== false,
         } : null,
         standings: room.race.standings ? {
           placementOrder: [...room.race.standings.placementOrder],
           rankByPlayer: [...room.race.standings.rankByPlayer],
+          survivors: room.race.standings.survivors,
+          eliminatedOrder: room.race.standings.eliminatedOrder ? [...room.race.standings.eliminatedOrder] : undefined,
         } : undefined,
         finishedAt: room.race.finishedAt,
       } : undefined,
@@ -566,8 +633,13 @@ export class RoomManager {
     return slots;
   }
 
-  private createStartPlayers(simSlots: boolean[], totalLaps: number, simTrackPoints: SimTrackPoint[]) {
-    const frame = buildSharedStartFrame(simTrackPoints);
+  private createStartPlayers(
+    simSlots: boolean[],
+    totalLaps: number,
+    simRoutePoints: SimRoutePoint[],
+    layout: RouteCustomLayout | null,
+  ) {
+    const frame = buildSharedStartFrame(simRoutePoints, layout as any);
     const list: Array<{
       x: number; y: number; z: number;
       qx: number; qy: number; qz: number; qw: number;
@@ -587,7 +659,7 @@ export class RoomManager {
       slowActive: boolean;
     }> = [];
     for (let i = 0; i < 4; i++) {
-      const slot = buildSharedStartSlotPose(simTrackPoints, i);
+      const slot = buildSharedStartSlotPose(simRoutePoints, i, undefined, layout as any);
       const qy = Math.sin(frame.heading * 0.5);
       const qw = Math.cos(frame.heading * 0.5);
       list.push({
@@ -618,12 +690,17 @@ export class RoomManager {
     const humanBySlot = new Map<number, InternalMember>();
     for (const m of room.members) humanBySlot.set(m.slotIndex, m);
 
-    const simTrackPoints = room.race.simTrackPoints.length > 0 ? room.race.simTrackPoints : this.defaultSimTrackPoints;
-    const simMainTrackPoints = room.race.simMainTrackPoints.length > 0 ? room.race.simMainTrackPoints : this.defaultSimMainTrackPoints;
+    const simRoutePoints = room.race.simTrackPoints.length > 0 ? room.race.simTrackPoints : this.defaultSimRoutePoints;
+    const simMainRoutePoints = room.race.simMainTrackPoints.length > 0 ? room.race.simMainTrackPoints : this.defaultSimMainRoutePoints;
     const simCheckpoints = room.race.simCheckpoints.length > 0 ? room.race.simCheckpoints : this.defaultSimCheckpoints;
     const rngState = room.race.rngState ?? (room.race.rngState = createSimRandomState((this.hashString(room.roomId) ^ Date.now()) >>> 0));
     const rng = () => nextSimRandom(rngState);
-    const itemBoxes = room.race.itemBoxes ?? (room.race.itemBoxes = buildSharedSimItemBoxes(simMainTrackPoints, 10, () => rollSharedPreviewItem(rng)));
+    const itemBoxes = room.race.itemBoxes ?? (room.race.itemBoxes = buildSharedSimItemBoxes(
+      simMainRoutePoints,
+      10,
+      () => rollSharedPreviewItem(rng),
+      room.race.routeLayout as any,
+    ));
     const obstacles = room.race.obstacles ?? (room.race.obstacles = []);
     room.race.finalLapIntensity = shouldEnableSharedFinalLapIntensity(players as Array<{ lap: number; finished: boolean; chainLength: number }>, room.settings.laps);
     const runtime = room.race.runtime ?? (room.race.runtime = Array.from({ length: 4 }, () => ({
@@ -668,10 +745,14 @@ export class RoomManager {
       }) : {
         ...getSharedAdvancedAiInput(
           p as { x: number; y: number; z: number; heading: number; speed: number; chainLength: number },
-          simMainTrackPoints as any,
+          simMainRoutePoints as any,
           rt,
           dt,
+          room.race.mode,
+          players as Array<{ x: number; y: number; z: number; finished: boolean; chainLength: number }>,
+          i,
           rng,
+          room.race.routeLayout?.layoutType === 'arena',
         ),
         useItem: false,
         lookBack: false,
@@ -709,10 +790,10 @@ export class RoomManager {
         frameEvents.push({ type: 'sacrifice_boost', playerIndex: i });
       }
       if (actionEdges.useItemJustPressed && p.heldItemId) {
-        useSharedHeldItem(i, players as any, runtime as any, obstacles as any, room.race.finalLapIntensity, frameEvents, this.maxBlocks);
+        useSharedHeldItem(i, players as any, runtime as any, obstacles as any, room.race.finalLapIntensity, frameEvents, this.getModeMaxBlocks(room.race.mode));
       }
-      if (!member && p.heldItemId && rt.aiItemCooldownMs <= 0 && shouldSharedAiUseItem(i, players as any, p.heldItemId as ItemId, rng)) {
-        useSharedHeldItem(i, players as any, runtime as any, obstacles as any, room.race.finalLapIntensity, frameEvents, this.maxBlocks);
+      if (!member && p.heldItemId && rt.aiItemCooldownMs <= 0 && shouldSharedAiUseItem(i, players as any, p.heldItemId as ItemId, room.race.mode, rng)) {
+        useSharedHeldItem(i, players as any, runtime as any, obstacles as any, room.race.finalLapIntensity, frameEvents, this.getModeMaxBlocks(room.race.mode));
         rt.aiItemCooldownMs = 900 + rng() * 700;
       }
 
@@ -722,13 +803,16 @@ export class RoomManager {
     }
 
     const prevFinished = players.map(p => !!p.finished);
+    const raceLayoutType = room.race.routeLayout?.layoutType === 'arena' ? 'arena' : 'loop';
     const step = stepRace(
       {
         tick: room.race.tick - 1,
         timeMs: Math.max(0, (room.race.tick - 1) * dt * 1000),
         totalLaps: room.settings.laps,
-        trackMain: simMainTrackPoints,
-        trackAll: simTrackPoints,
+        layoutType: raceLayoutType,
+        interiorObstacles: room.race.routeLayout?.interiorObstacles,
+        routeMain: simMainRoutePoints,
+        routeAll: simRoutePoints,
         checkpoints: simCheckpoints,
         players: players as any,
         runtime: runtime as any,
@@ -736,6 +820,7 @@ export class RoomManager {
       inputs,
       dt,
       raceAssist,
+      room.race.mode,
     );
     for (let i = 0; i < players.length; i++) {
       if (!prevFinished[i] && players[i].finished && !players[i].eliminated && (players[i].finishTime ?? 0) <= 0) {
@@ -765,7 +850,7 @@ export class RoomManager {
       dt,
       frameEvents,
       {
-        maxBlocks: this.maxBlocks,
+        maxBlocks: this.getModeMaxBlocks(room.race.mode),
         cooldownMs: this.stealCooldownMsValue,
         segmentSpacing: this.segmentSpacing,
         headToBodyHitDistance: this.headToBodyHitDistance,
@@ -775,8 +860,12 @@ export class RoomManager {
       p.eliminated = p.chainLength <= 0;
       if (p.eliminated) p.speed = 0;
     }
-    room.race.standings = this.makeStandings(computeSharedPlacements(players, simCheckpoints.length));
+    room.race.standings = this.makeStandings(
+      computeSharedPlacements(players, simCheckpoints.length, room.race.mode),
+      players,
+    );
     room.race.authoritative.tick = room.race.tick;
+    room.race.authoritative.mode = room.race.mode;
     room.race.authoritative.itemBoxes = itemBoxes.map(b => ({
       x: b.x,
       y: b.y,
@@ -806,15 +895,26 @@ export class RoomManager {
     return out;
   }
 
-  private makeStandings(placementOrder: number[]): RaceStandings {
+  private makeStandings(
+    placementOrder: number[],
+    players?: Array<{ eliminated?: boolean }>,
+  ): RaceStandings {
     const rankByPlayer = new Array(4).fill(3);
     for (let place = 0; place < placementOrder.length && place < 4; place++) {
       const playerIndex = placementOrder[place] | 0;
       if (playerIndex >= 0 && playerIndex < 4) rankByPlayer[playerIndex] = place;
     }
+    const eliminatedOrder = players
+      ? placementOrder.filter(idx => players[idx]?.eliminated)
+      : undefined;
+    const survivors = players
+      ? players.filter((p, idx) => !p?.eliminated && placementOrder.includes(idx)).length
+      : undefined;
     return {
       placementOrder: placementOrder.slice(0, 4),
       rankByPlayer,
+      survivors,
+      eliminatedOrder,
     };
   }
 
@@ -828,23 +928,63 @@ export class RoomManager {
     return out;
   }
 
-  private sanitizeTrackLayout(layout: TrackCustomLayout | null | undefined): TrackCustomLayout | null {
-    if (!layout || !Array.isArray(layout.main) || layout.main.length < 4) return null;
-    const main = layout.main.map(cp => ({
-      x: Number(cp.x) || 0,
-      z: Number(cp.z) || 0,
-      w: Math.max(4, Math.min(30, Number(cp.w) || 10)),
-      e: Number(cp.e) || 0,
-      ramp: !!cp.ramp,
-      bridge: !!cp.bridge,
-      noRails: !!cp.noRails,
-    }));
+  private sanitizeMode(input: unknown): GameMode {
+    return input === 'derby' ? 'derby' : 'classic';
+  }
+
+  private getModeMaxBlocks(mode: GameMode): number {
+    if (mode === 'derby') return 10;
+    return this.defaultMaxBlocks;
+  }
+
+  private sanitizeRouteLayout(layout: RouteCustomLayout | null | undefined): RouteCustomLayout | null {
+    if (!layout) return null;
+    const layoutType: RouteLayoutType = layout.layoutType === 'arena' ? 'arena' : 'loop';
+    const main = Array.isArray(layout.main)
+      ? layout.main.map(cp => ({
+        x: Number(cp.x) || 0,
+        z: Number(cp.z) || 0,
+        w: Math.max(4, Math.min(30, Number(cp.w) || 10)),
+        e: Number(cp.e) || 0,
+        ramp: !!cp.ramp,
+        bridge: !!cp.bridge,
+        noRails: !!cp.noRails,
+        boost: !!cp.boost,
+        loop: !!cp.loop,
+        tunnel: !!cp.tunnel,
+        tunnelWall: !!cp.tunnelWall,
+        tunnelWallSide: (cp.tunnelWallSide === 'left' || cp.tunnelWallSide === 'right' ? cp.tunnelWallSide : 'bottom') as 'bottom' | 'left' | 'right',
+      }))
+      : [];
+    if (layoutType === 'loop' && main.length < 4) return null;
     const shortcut = Array.isArray(layout.shortcut)
       ? layout.shortcut
         .filter(cp => Number.isFinite(cp.x) && Number.isFinite(cp.z) && Number.isFinite(cp.e))
         .map(cp => ({ x: Number(cp.x), z: Number(cp.z), e: Number(cp.e) }))
       : undefined;
-    return { main, shortcut };
+    const interiorObstacles = Array.isArray(layout.interiorObstacles)
+      ? layout.interiorObstacles
+        .filter(o => Number.isFinite(o.x) && Number.isFinite(o.z))
+        .map(o => ({
+          x: Number(o.x),
+          z: Number(o.z),
+          radius: Math.max(1, Math.min(40, Number(o.radius) || 5)),
+          height: Math.max(1.2, Math.min(30, Number(o.height) || 4)),
+        }))
+      : undefined;
+    return {
+      main,
+      shortcut,
+      layoutType,
+      arenaShape: layout.arenaShape === 'rounded_rect' ? 'rounded_rect' : 'circle',
+      arenaRadiusX: Math.max(24, Math.min(260, Number(layout.arenaRadiusX) || 84)),
+      arenaRadiusZ: Math.max(24, Math.min(260, Number(layout.arenaRadiusZ) || 74)),
+      arenaFloorY: Math.max(-10, Math.min(80, Number(layout.arenaFloorY) || 4)),
+      arenaWallHeight: Math.max(2, Math.min(36, Number(layout.arenaWallHeight) || 7)),
+      arenaObstacleDensity: Math.max(0, Math.min(1, Number(layout.arenaObstacleDensity) || 0)),
+      interiorObstacles,
+      showCenterpiece: layout.showCenterpiece !== false,
+    };
   }
 
   private hashString(value: string): number {

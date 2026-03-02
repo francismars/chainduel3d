@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { Kart } from './Kart';
-import { Track } from './Track';
+import { ChainRider } from './ChainRider';
+import { Route } from './Route';
 import { PlayerInput } from './InputManager';
 
 interface AIDriverContext {
@@ -14,7 +14,7 @@ export class AIDriver {
   private steerNoise = 0;
   private noiseCooldown = 0;
 
-  getInput(kart: Kart, track: Track, hasItem: boolean, dt: number, context?: AIDriverContext): PlayerInput {
+  getInput(kart: ChainRider, track: Route, hasItem: boolean, dt: number, context?: AIDriverContext): PlayerInput {
     const pts = track.trackPoints;
     const n = pts.length;
     const kartPos = kart.getPosition();

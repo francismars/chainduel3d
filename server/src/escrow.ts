@@ -26,7 +26,7 @@ export class EscrowManager {
     for (let i = 0; i < 2; i++) {
       const invoice = await this.lnbits.createInvoice(
         session.wagerAmount,
-        `BlockKart deposit - ${session.players[i].name} - Session ${sessionId.slice(0, 8)}`
+        `CHAINDUEL3D deposit - ${session.players[i].name} - Session ${sessionId.slice(0, 8)}`
       );
       this.sessions.updatePlayerPayment(sessionId, i, invoice.paymentHash, invoice.bolt11);
       results.push({ bolt11: invoice.bolt11, paymentHash: invoice.paymentHash });
@@ -73,7 +73,7 @@ export class EscrowManager {
     try {
       const lnurl = await this.lnbits.createLnurlWithdraw(
         winnerAmount,
-        `BlockKart winnings - Session ${sessionId.slice(0, 8)}`
+        `CHAINDUEL3D winnings - Session ${sessionId.slice(0, 8)}`
       );
 
       this.sessions.setStatus(sessionId, 'payout_complete');

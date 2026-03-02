@@ -1,0 +1,745 @@
+{
+  "routes": [
+    {
+      "id": "default",
+      "name": "Genesis Route",
+      "layout": {
+        "layoutType": "loop",
+        "main": [
+          {
+            "x": -80,
+            "z": -20,
+            "w": 12,
+            "e": 4
+          },
+          {
+            "x": -40,
+            "z": -88,
+            "w": 12,
+            "e": 5
+          },
+          {
+            "x": 36,
+            "z": -98,
+            "w": 12,
+            "e": 7,
+            "ramp": true
+          },
+          {
+            "x": 94,
+            "z": -56,
+            "w": 11,
+            "e": 13,
+            "bridge": true
+          },
+          {
+            "x": 106,
+            "z": 20,
+            "w": 11,
+            "e": 16,
+            "bridge": true
+          },
+          {
+            "x": 62,
+            "z": 86,
+            "w": 12,
+            "e": 12,
+            "bridge": true
+          },
+          {
+            "x": -18,
+            "z": 102,
+            "w": 12,
+            "e": 7
+          },
+          {
+            "x": -88,
+            "z": 62,
+            "w": 11,
+            "e": 4
+          }
+        ],
+        "shortcut": [
+          {
+            "x": 34,
+            "z": -56,
+            "e": 8
+          },
+          {
+            "x": 14,
+            "z": -8,
+            "e": 10
+          },
+          {
+            "x": -6,
+            "z": 34,
+            "e": 9
+          },
+          {
+            "x": -38,
+            "z": 60,
+            "e": 7
+          }
+        ]
+      },
+      "createdAt": 1772410973438,
+      "updatedAt": 1772410973438
+    },
+    {
+      "id": "cool",
+      "name": "Cool",
+      "layout": {
+        "main": [
+          {
+            "x": -37.09,
+            "z": -62.01,
+            "w": 12,
+            "e": 36.25,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 6.75,
+            "z": -180.5,
+            "w": 12,
+            "e": 17.25,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -39.86,
+            "z": -175.49,
+            "w": 12,
+            "e": 10.25,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -41.91,
+            "z": -139.17,
+            "w": 12,
+            "e": 2.75,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 59.85,
+            "z": -102.53,
+            "w": 12,
+            "e": 5.75,
+            "ramp": true,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 108.5,
+            "z": -56.69,
+            "w": 11,
+            "e": 10.25,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 135.98,
+            "z": 56.74,
+            "w": 12,
+            "e": 7,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": true,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 90.82,
+            "z": 114.62,
+            "w": 12,
+            "e": 7,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 53.47,
+            "z": 87.66,
+            "w": 12,
+            "e": 7,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 27.34,
+            "z": 36.71,
+            "w": 12,
+            "e": 16.25,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -46.09,
+            "z": 21.57,
+            "w": 12,
+            "e": 16.25,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -57.19,
+            "z": 60.15,
+            "w": 12,
+            "e": 23.75,
+            "ramp": false,
+            "bridge": true,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -30.28,
+            "z": 82.44,
+            "w": 12,
+            "e": 27.25,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -2.9,
+            "z": 63.77,
+            "w": 12,
+            "e": 30.5,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -19.96,
+            "z": 42.95,
+            "w": 12,
+            "e": 36.5,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -40.84,
+            "z": 66.85,
+            "w": 12,
+            "e": 42.5,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -16.07,
+            "z": 84.88,
+            "w": 12,
+            "e": 50.5,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 1.27,
+            "z": 55.31,
+            "w": 12,
+            "e": 52.5,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -24.41,
+            "z": 16.51,
+            "w": 12,
+            "e": 52.5,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": true,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          }
+        ],
+        "shortcut": [],
+        "layoutType": "loop",
+        "arenaShape": "circle",
+        "arenaRadiusX": 84,
+        "arenaRadiusZ": 74,
+        "arenaFloorY": 4,
+        "arenaWallHeight": 7,
+        "arenaObstacleDensity": 0,
+        "interiorObstacles": [],
+        "showCenterpiece": true
+      },
+      "createdAt": 1772412932337,
+      "updatedAt": 1772412932337
+    },
+    {
+      "id": "derby-bowl",
+      "name": "Derby Bowl",
+      "layout": {
+        "main": [
+          {
+            "x": 0,
+            "z": -86,
+            "w": 28,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 40,
+            "z": -68,
+            "w": 26,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 74,
+            "z": -32,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 86,
+            "z": 0,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 72,
+            "z": 34,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 36,
+            "z": 70,
+            "w": 26,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 0,
+            "z": 86,
+            "w": 28,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -36,
+            "z": 70,
+            "w": 26,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -72,
+            "z": 34,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -86,
+            "z": 0,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -74,
+            "z": -32,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -40,
+            "z": -68,
+            "w": 26,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          }
+        ],
+        "shortcut": [],
+        "layoutType": "loop",
+        "arenaShape": "circle",
+        "arenaRadiusX": 84,
+        "arenaRadiusZ": 74,
+        "arenaFloorY": 4,
+        "arenaWallHeight": 7,
+        "arenaObstacleDensity": 0,
+        "interiorObstacles": [],
+        "showCenterpiece": true
+      },
+      "createdAt": 1772414000000,
+      "updatedAt": 1772414000000
+    },
+    {
+      "id": "derby-crossfire",
+      "name": "Derby Crossfire Arena",
+      "layout": {
+        "main": [
+          {
+            "x": 51.2,
+            "z": -5.41,
+            "w": 22,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 26.94,
+            "z": -18.75,
+            "w": 22,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -7.41,
+            "z": 18.12,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": true,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -41.53,
+            "z": 44.59,
+            "w": 22,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -62.99,
+            "z": 30.76,
+            "w": 22,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -50.12,
+            "z": 6.14,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": -7.05,
+            "z": 11.85,
+            "w": 24,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": true,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          },
+          {
+            "x": 34.46,
+            "z": 21.68,
+            "w": 22,
+            "e": 4,
+            "ramp": false,
+            "bridge": false,
+            "noRails": false,
+            "boost": false,
+            "loop": false,
+            "tunnel": false,
+            "tunnelWall": false,
+            "tunnelWallSide": "bottom"
+          }
+        ],
+        "shortcut": [],
+        "layoutType": "loop",
+        "arenaShape": "circle",
+        "arenaRadiusX": 84,
+        "arenaRadiusZ": 74,
+        "arenaFloorY": 4,
+        "arenaWallHeight": 7,
+        "arenaObstacleDensity": 0,
+        "interiorObstacles": [],
+        "showCenterpiece": false
+      },
+      "createdAt": 1772415000000,
+      "updatedAt": 1772422087836
+    },
+    {
+      "id": "derby-ironpit",
+      "name": "Derby Iron Pit",
+      "layout": {
+        "main": [],
+        "shortcut": [],
+        "layoutType": "arena",
+        "arenaShape": "circle",
+        "arenaRadiusX": 96,
+        "arenaRadiusZ": 82,
+        "arenaFloorY": 4,
+        "arenaWallHeight": 8,
+        "arenaObstacleDensity": 0.35,
+        "interiorObstacles": [
+          {
+            "x": 0,
+            "z": 0,
+            "radius": 8,
+            "height": 6
+          },
+          {
+            "x": 28,
+            "z": -18,
+            "radius": 5,
+            "height": 4
+          },
+          {
+            "x": -24,
+            "z": 16,
+            "radius": 6,
+            "height": 5
+          },
+          {
+            "x": -34,
+            "z": -24,
+            "radius": 4,
+            "height": 4
+          },
+          {
+            "x": 36,
+            "z": 24,
+            "radius": 4,
+            "height": 4
+          }
+        ],
+        "showCenterpiece": false
+      },
+      "createdAt": 1772460000000,
+      "updatedAt": 1772460000000
+    }
+  ]
+}

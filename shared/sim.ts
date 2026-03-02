@@ -1,4 +1,11 @@
-import type { ChainClass, ItemId } from './types';
+import type {
+  ChainClass,
+  GameMode,
+  ItemId,
+  RouteArenaObstacle,
+  RouteArenaShape,
+  RouteLayoutType,
+} from './types';
 
 export interface SimInput {
   forward: boolean;
@@ -46,6 +53,7 @@ const DRIFT_BASE_TURN = 2.0;
 const DRIFT_TIGHTEN = 3.2;
 const DRIFT_WIDEN = 0.8;
 const DRIFT_SLIDE_ANGLE = 0.25;
+const DERBY_MAX_TIME_MS = 6 * 60 * 1000;
 
 export interface SimRandomState {
   value: number;
@@ -164,7 +172,7 @@ export function stepPlayerKinematics(
   return { moveAngle, driftStarted, driftEnded, driftBoostMs, driftBoostSpeed };
 }
 
-export interface SimTrackPoint {
+export interface SimRoutePoint {
   x: number;
   y: number;
   z: number;
@@ -172,28 +180,42 @@ export interface SimTrackPoint {
   dirZ: number;
   width: number;
   ramp: boolean;
+  boost: boolean;
+  loop: boolean;
+  tunnel: boolean;
+  tunnelWall: boolean;
+  tunnelWallSide: 'bottom' | 'left' | 'right';
 }
-
-export interface SimTrackControlPoint {
+export interface SimRouteControlPoint {
   x: number;
   z: number;
   w: number;
   e: number;
   ramp?: boolean;
+  boost?: boolean;
+  loop?: boolean;
+  tunnel?: boolean;
+  tunnelWall?: boolean;
+  tunnelWallSide?: 'bottom' | 'left' | 'right';
 }
-
-export interface SimTrackShortcutControlPoint {
+export interface SimRouteShortcutControlPoint {
   x: number;
   z: number;
   e: number;
 }
-
-export interface SimTrackLayout {
-  main: SimTrackControlPoint[];
-  shortcut?: SimTrackShortcutControlPoint[];
+export interface SimRouteLayout {
+  main: SimRouteControlPoint[];
+  shortcut?: SimRouteShortcutControlPoint[];
+  layoutType?: RouteLayoutType;
+  arenaShape?: RouteArenaShape;
+  arenaRadiusX?: number;
+  arenaRadiusZ?: number;
+  arenaFloorY?: number;
+  arenaWallHeight?: number;
+  arenaObstacleDensity?: number;
+  interiorObstacles?: RouteArenaObstacle[];
 }
-
-export interface SimDefaultTrackParams {
+export interface SimDefaultRouteParams {
   numSegments: number;
   baseRadius: number;
   radiusWaveA: number;
@@ -206,8 +228,7 @@ export interface SimDefaultTrackParams {
   widthWaveA: number;
   widthWaveB: number;
 }
-
-const DEFAULT_SIM_TRACK_PARAMS: SimDefaultTrackParams = {
+const DEFAULT_SIM_ROUTE_PARAMS: SimDefaultRouteParams = {
   numSegments: 360,
   baseRadius: 104,
   radiusWaveA: 6,
@@ -220,6 +241,12 @@ const DEFAULT_SIM_TRACK_PARAMS: SimDefaultTrackParams = {
   widthWaveA: 0.9,
   widthWaveB: 0.5,
 };
+
+const DEFAULT_ARENA_RADIUS_X = 84;
+const DEFAULT_ARENA_RADIUS_Z = 74;
+const DEFAULT_ARENA_FLOOR_Y = 4;
+const DEFAULT_ARENA_WALL_HEIGHT = 7;
+const DEFAULT_ARENA_BOWL_RISE = 2.6;
 
 export interface SimCheckpoint {
   x: number;
@@ -271,6 +298,7 @@ export interface SimPlayerRuntimeState extends SimRuntimeState {
   airborne: boolean;
   airborneElapsed: number;
   vy: number;
+  tunnelAngle: number;
   aiItemCooldownMs: number;
   aiLastWaypointIdx: number;
   aiSteerNoise: number;
@@ -281,8 +309,10 @@ export interface SimRaceState {
   tick: number;
   timeMs: number;
   totalLaps: number;
-  trackMain: SimTrackPoint[];
-  trackAll: SimTrackPoint[];
+  layoutType?: RouteLayoutType;
+  interiorObstacles?: RouteArenaObstacle[];
+  routeMain: SimRoutePoint[];
+  routeAll: SimRoutePoint[];
   checkpoints: SimCheckpoint[];
   players: SimPlayerState[];
   runtime: SimPlayerRuntimeState[];
@@ -366,13 +396,22 @@ export interface SimItemPlayerState extends SimEffectPlayerState {
   heldItemId: ItemId | null;
 }
 
-export interface SimTrackInfo {
+export interface SimRouteInfo {
   elevation: number;
+  centerX: number;
+  centerZ: number;
   rightX: number;
   rightZ: number;
   offset: number;
   halfWidth: number;
   ramp: boolean;
+  boost: boolean;
+  loop: boolean;
+  loopBlend: number;
+  tunnel: boolean;
+  tunnelBlend: number;
+  tunnelWall: boolean;
+  tunnelWallSide: 'bottom' | 'left' | 'right';
   dirX: number;
   dirZ: number;
 }
@@ -405,6 +444,7 @@ export function createDefaultRuntimeState(): SimPlayerRuntimeState {
     airborne: false,
     airborneElapsed: 0,
     vy: 0,
+    tunnelAngle: 0,
     aiItemCooldownMs: 0,
     aiLastWaypointIdx: 0,
     aiSteerNoise: 0,
@@ -412,13 +452,13 @@ export function createDefaultRuntimeState(): SimPlayerRuntimeState {
   };
 }
 
-export function getTrackInfo(
+export function getRouteInfo(
   x: number,
   y: number,
   z: number,
-  mainPoints: SimTrackPoint[],
-  allPoints: SimTrackPoint[],
-): SimTrackInfo {
+  mainPoints: SimRoutePoint[],
+  allPoints: SimRoutePoint[],
+): SimRouteInfo {
   const n = allPoints.length;
   let bestDist = Infinity;
   let bestIdx = 0;
@@ -481,21 +521,93 @@ export function getTrackInfo(
     (-y0 + 3 * y1 - 3 * y2 + y3) * t3
   );
 
+  // Blend strictly across the active segment to avoid wide-window popping.
+  const loopA = pA.loop ? 1 : 0;
+  const loopB = pB.loop ? 1 : 0;
+  const loopBlend = loopA * (1 - t) + loopB * t;
+  const tunnelA = pA.tunnel ? 1 : 0;
+  const tunnelB = pB.tunnel ? 1 : 0;
+  const tunnelBlend = tunnelA * (1 - t) + tunnelB * t;
+  const wallA = pA.tunnelWall ? 1 : 0;
+  const wallB = pB.tunnelWall ? 1 : 0;
+  const wallBlend = wallA * (1 - t) + wallB * t;
+  const tunnelWall = wallBlend > 0.5;
+  const sideWeight = (side: 'bottom' | 'left' | 'right') =>
+    (pA.tunnelWallSide === side ? (1 - t) : 0) + (pB.tunnelWallSide === side ? t : 0);
+  const sideBottomAcc = sideWeight('bottom');
+  const sideLeftAcc = sideWeight('left');
+  const sideRightAcc = sideWeight('right');
+  const wallSide: 'bottom' | 'left' | 'right' =
+    sideLeftAcc > sideRightAcc && sideLeftAcc > sideBottomAcc
+      ? 'left'
+      : sideRightAcc > sideBottomAcc
+        ? 'right'
+        : 'bottom';
+
   return {
     elevation,
+    centerX: tp.x,
+    centerZ: tp.z,
     rightX,
     rightZ,
     offset,
     halfWidth: tp.width / 2,
     ramp: !!tp.ramp,
+    boost: !!tp.boost,
+    loop: !!tp.loop,
+    loopBlend,
+    tunnel: !!tp.tunnel,
+    tunnelBlend,
+    tunnelWall,
+    tunnelWallSide: wallSide,
     dirX: tp.dirX,
     dirZ: tp.dirZ,
   };
 }
 
-export function buildSimTrackPointsFromControlPoints(controlPoints: SimTrackControlPoint[]): SimTrackPoint[] {
+function getSimLayoutType(layout: SimRouteLayout | null | undefined): RouteLayoutType {
+  return layout?.layoutType === 'arena' ? 'arena' : 'loop';
+}
+
+export function buildSimArenaMainRoutePoints(layout: SimRouteLayout | null): SimRoutePoint[] {
+  const radiusX = Math.max(26, Number(layout?.arenaRadiusX) || DEFAULT_ARENA_RADIUS_X);
+  const radiusZ = Math.max(26, Number(layout?.arenaRadiusZ) || DEFAULT_ARENA_RADIUS_Z);
+  const floorY = Number(layout?.arenaFloorY) || DEFAULT_ARENA_FLOOR_Y;
+  const wallHeight = Math.max(3, Number(layout?.arenaWallHeight) || DEFAULT_ARENA_WALL_HEIGHT);
+  const segCount = 240;
+  const points: SimRoutePoint[] = [];
+  for (let i = 0; i < segCount; i++) {
+    const t = i / segCount;
+    const ang = t * Math.PI * 2;
+    const x = Math.cos(ang) * radiusX;
+    const z = Math.sin(ang) * radiusZ;
+    const nx = -Math.sin(ang) * radiusX;
+    const nz = Math.cos(ang) * radiusZ;
+    const nlen = Math.hypot(nx, nz) || 1;
+    const dirX = nx / nlen;
+    const dirZ = nz / nlen;
+    points.push({
+      x,
+      y: floorY,
+      z,
+      dirX,
+      dirZ,
+      width: Math.max(14, wallHeight * 2.2),
+      ramp: false,
+      boost: false,
+      loop: false,
+      tunnel: false,
+      tunnelWall: false,
+      tunnelWallSide: 'bottom',
+    });
+  }
+  return points;
+}
+
+
+export function buildSimRoutePointsFromControlPoints(controlPoints: SimRouteControlPoint[]): SimRoutePoint[] {
   const segCount = Math.max(180, Math.min(900, controlPoints.length * 18));
-  const points: SimTrackPoint[] = [];
+  const points: SimRoutePoint[] = [];
   const n = controlPoints.length;
   const wrap = (i: number) => (i % n + n) % n;
   const catmull = (p0: number, p1: number, p2: number, p3: number, t: number) => {
@@ -546,17 +658,22 @@ export function buildSimTrackPointsFromControlPoints(controlPoints: SimTrackCont
       dirZ,
       width: cur.w,
       ramp: !!controlPoints[nearestCp]?.ramp,
+      boost: !!controlPoints[nearestCp]?.boost,
+      loop: !!controlPoints[nearestCp]?.loop,
+      tunnel: !!controlPoints[nearestCp]?.tunnel,
+      tunnelWall: !!controlPoints[nearestCp]?.tunnelWall,
+      tunnelWallSide: controlPoints[nearestCp]?.tunnelWallSide ?? 'bottom',
     });
   }
   return points;
 }
 
-export function buildDefaultSimMainTrackPoints(
-  params?: Partial<SimDefaultTrackParams>,
-): SimTrackPoint[] {
-  const p = { ...DEFAULT_SIM_TRACK_PARAMS, ...(params ?? {}) };
+export function buildDefaultSimMainRoutePoints(
+  params?: Partial<SimDefaultRouteParams>,
+): SimRoutePoint[] {
+  const p = { ...DEFAULT_SIM_ROUTE_PARAMS, ...(params ?? {}) };
   const numSegments = Math.max(220, Math.min(720, Math.round(p.numSegments)));
-  const points: SimTrackPoint[] = [];
+  const points: SimRoutePoint[] = [];
   for (let i = 0; i < numSegments; i++) {
     const t = i / numSegments;
     const theta = t * Math.PI * 4;
@@ -584,17 +701,21 @@ export function buildDefaultSimMainTrackPoints(
     const width = p.widthBase + Math.sin(theta * 0.7 + 1.1) * p.widthWaveA + Math.sin(theta * 1.4) * p.widthWaveB;
     const phase = ((theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
     const ramp = (phase > 1.02 && phase < 1.18) || (phase > 4.18 && phase < 4.34);
-    points.push({ x, y, z, dirX, dirZ, width, ramp });
+    const boost = (phase > 0.28 && phase < 0.41) || (phase > 3.42 && phase < 3.56);
+    const loop = (phase > 1.62 && phase < 1.9);
+    const tunnel = (phase > 2.05 && phase < 2.34);
+    points.push({ x, y, z, dirX, dirZ, width, ramp, boost, loop, tunnel, tunnelWall: false, tunnelWallSide: 'bottom' });
   }
   return points;
 }
 
-export function buildSimShortcutTrackPoints(layout: SimTrackLayout | null): SimTrackPoint[] {
-  const fromControl = (control: SimTrackShortcutControlPoint[]) => {
+export function buildSimShortcutRoutePoints(layout: SimRouteLayout | null): SimRoutePoint[] {
+  if (getSimLayoutType(layout) === 'arena') return [];
+  const fromControl = (control: SimRouteShortcutControlPoint[]) => {
     const segCount = Math.max(24, control.length * 10);
     const n = control.length;
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-    const points: SimTrackPoint[] = [];
+    const points: SimRoutePoint[] = [];
     for (let i = 0; i < segCount; i++) {
       const t = i / Math.max(1, segCount - 1);
       const f = t * (n - 1);
@@ -619,7 +740,7 @@ export function buildSimShortcutTrackPoints(layout: SimTrackLayout | null): SimT
       const len = Math.hypot(dirX, dirZ) || 1;
       dirX /= len;
       dirZ /= len;
-      points.push({ x, y, z, dirX, dirZ, width: 6, ramp: false });
+      points.push({ x, y, z, dirX, dirZ, width: 6, ramp: false, boost: false, loop: false, tunnel: false, tunnelWall: false, tunnelWallSide: 'bottom' });
     }
     return points;
   };
@@ -641,50 +762,88 @@ export function buildSimShortcutTrackPoints(layout: SimTrackLayout | null): SimT
   ]);
 }
 
-export function buildSimMainTrackPoints(
-  layout: SimTrackLayout | null,
-  defaultParams?: Partial<SimDefaultTrackParams>,
-): SimTrackPoint[] {
-  if (layout?.main && layout.main.length >= 4) {
-    return buildSimTrackPointsFromControlPoints(layout.main);
+export function buildSimMainRoutePoints(
+  layout: SimRouteLayout | null,
+  defaultParams?: Partial<SimDefaultRouteParams>,
+): SimRoutePoint[] {
+  if (getSimLayoutType(layout) === 'arena') {
+    return buildSimArenaMainRoutePoints(layout);
   }
-  return buildDefaultSimMainTrackPoints(defaultParams);
+  if (layout?.main && layout.main.length >= 4) {
+    return buildSimRoutePointsFromControlPoints(layout.main);
+  }
+  return buildDefaultSimMainRoutePoints(defaultParams);
 }
 
-export function buildSimTrackPoints(
-  layout: SimTrackLayout | null,
-  mainPoints: SimTrackPoint[],
-): SimTrackPoint[] {
-  const shortcut = buildSimShortcutTrackPoints(layout);
+export function buildSimRoutePoints(
+  layout: SimRouteLayout | null,
+  mainPoints: SimRoutePoint[],
+): SimRoutePoint[] {
+  const shortcut = buildSimShortcutRoutePoints(layout);
   if (shortcut.length === 0) return mainPoints;
   return [...mainPoints, ...shortcut];
 }
 
 export function buildSimCheckpoints(
-  trackPoints: SimTrackPoint[],
+  routePoints: SimRoutePoint[],
   numCheckpoints = 14,
+  layout: SimRouteLayout | null = null,
 ): SimCheckpoint[] {
   const checkpoints: SimCheckpoint[] = [];
-  if (trackPoints.length <= 0 || numCheckpoints <= 0) return checkpoints;
-  const interval = Math.max(1, Math.floor(trackPoints.length / numCheckpoints));
+  if (getSimLayoutType(layout) === 'arena') return checkpoints;
+  if (routePoints.length <= 0 || numCheckpoints <= 0) return checkpoints;
+  const interval = Math.max(1, Math.floor(routePoints.length / numCheckpoints));
   for (let i = 0; i < numCheckpoints; i++) {
-    const idx = Math.min(trackPoints.length - 1, i * interval);
-    const p = trackPoints[idx];
+    const idx = Math.min(routePoints.length - 1, i * interval);
+    const p = routePoints[idx];
     checkpoints.push({ x: p.x, z: p.z, width: p.width });
   }
   return checkpoints;
 }
 
 export function buildItemBoxPositions(
-  trackPoints: SimTrackPoint[],
+  routePoints: SimRoutePoint[],
   numBoxes = 10,
+  layout: SimRouteLayout | null = null,
 ): SimItemBoxPosition[] {
   const positions: SimItemBoxPosition[] = [];
-  if (trackPoints.length <= 0 || numBoxes <= 0) return positions;
-  const interval = Math.max(1, Math.floor(trackPoints.length / numBoxes));
+  if (routePoints.length <= 0 || numBoxes <= 0) return positions;
+  if (getSimLayoutType(layout) === 'arena') {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    let floorYAcc = 0;
+    for (const p of routePoints) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z);
+      maxZ = Math.max(maxZ, p.z);
+      floorYAcc += p.y;
+    }
+    const centerX = (minX + maxX) * 0.5;
+    const centerZ = (minZ + maxZ) * 0.5;
+    const radiusX = Math.max(12, (maxX - minX) * 0.5 - 4);
+    const radiusZ = Math.max(12, (maxZ - minZ) * 0.5 - 4);
+    const floorY = floorYAcc / Math.max(1, routePoints.length);
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < numBoxes; i++) {
+      const angle = i * golden + 0.41;
+      const radial = 0.22 + 0.68 * Math.sqrt((((i + 1) * 0.61803398875) % 1 + 1) % 1);
+      const x = centerX + Math.cos(angle) * radiusX * radial;
+      const z = centerZ + Math.sin(angle) * radiusZ * radial;
+      const nx = (x - centerX) / Math.max(1, radiusX);
+      const nz = (z - centerZ) / Math.max(1, radiusZ);
+      const radialNorm = Math.min(1, Math.hypot(nx, nz));
+      const bowlY = floorY + radialNorm * radialNorm * DEFAULT_ARENA_BOWL_RISE;
+      positions.push({ x, y: bowlY + 1.0, z });
+    }
+    return positions;
+  }
+  const interval = Math.max(1, Math.floor(routePoints.length / numBoxes));
   for (let i = 1; i <= numBoxes; i++) {
-    const idx = (i * interval) % trackPoints.length;
-    const p = trackPoints[idx];
+    const idx = (i * interval) % routePoints.length;
+    const p = routePoints[idx];
     if (p.ramp) continue;
     positions.push({ x: p.x, y: p.y + 1.0, z: p.z });
   }
@@ -692,11 +851,12 @@ export function buildItemBoxPositions(
 }
 
 export function buildSimItemBoxes(
-  trackPoints: SimTrackPoint[],
+  routePoints: SimRoutePoint[],
   numBoxes = 10,
   previewItemFn: () => ItemId = rollPreviewItem,
+  layout: SimRouteLayout | null = null,
 ): SimItemBoxState[] {
-  return buildItemBoxPositions(trackPoints, numBoxes).map(pos => ({
+  return buildItemBoxPositions(routePoints, numBoxes, layout).map(pos => ({
     x: pos.x,
     y: pos.y,
     z: pos.z,
@@ -706,8 +866,8 @@ export function buildSimItemBoxes(
   }));
 }
 
-export function buildSimStartFrame(trackPoints: SimTrackPoint[]): SimStartFrame {
-  const start = trackPoints[0];
+export function buildSimStartFrame(routePoints: SimRoutePoint[], layout: SimRouteLayout | null = null): SimStartFrame {
+  const start = routePoints[0];
   if (!start) {
     return {
       x: 0,
@@ -720,12 +880,32 @@ export function buildSimStartFrame(trackPoints: SimTrackPoint[]): SimStartFrame 
       heading: 0,
     };
   }
-  const n = trackPoints.length;
+  const n = routePoints.length;
   let dirX = start.dirX;
   let dirZ = start.dirZ;
-  if (n >= 3) {
-    const prev = trackPoints[n - 1];
-    const next = trackPoints[1];
+  if (getSimLayoutType(layout) === 'arena') {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const p of routePoints) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z);
+      maxZ = Math.max(maxZ, p.z);
+    }
+    const centerX = (minX + maxX) * 0.5;
+    const centerZ = (minZ + maxZ) * 0.5;
+    const toCenterX = centerX - start.x;
+    const toCenterZ = centerZ - start.z;
+    const inwardLen = Math.hypot(toCenterX, toCenterZ);
+    if (inwardLen > 1e-5) {
+      dirX = toCenterX / inwardLen;
+      dirZ = toCenterZ / inwardLen;
+    }
+  } else if (n >= 3) {
+    const prev = routePoints[n - 1];
+    const next = routePoints[1];
     const sx = next.x - prev.x;
     const sz = next.z - prev.z;
     const sl = Math.hypot(sx, sz);
@@ -749,11 +929,53 @@ export function buildSimStartFrame(trackPoints: SimTrackPoint[]): SimStartFrame 
 }
 
 export function buildSimStartSlotPose(
-  trackPoints: SimTrackPoint[],
+  routePoints: SimRoutePoint[],
   slotIndex: number,
   lateralOffsets: number[] = [4.2, 1.4, -1.4, -4.2],
+  layout: SimRouteLayout | null = null,
 ): SimStartSlotPose {
-  const frame = buildSimStartFrame(trackPoints);
+  if (getSimLayoutType(layout) === 'arena' && routePoints.length > 0) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    let floorYAcc = 0;
+    for (const p of routePoints) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z);
+      maxZ = Math.max(maxZ, p.z);
+      floorYAcc += p.y;
+    }
+    const centerX = (minX + maxX) * 0.5;
+    const centerZ = (minZ + maxZ) * 0.5;
+    const radiusX = Math.max(12, (maxX - minX) * 0.5);
+    const radiusZ = Math.max(12, (maxZ - minZ) * 0.5);
+    const floorY = floorYAcc / Math.max(1, routePoints.length);
+    // Keep corner starts clearly away from perimeter so trailing chain
+    // segments can settle and rotate without immediate wall pressure.
+    const wallInset = 14;
+    const safeRadiusX = Math.max(10, radiusX - wallInset);
+    const safeRadiusZ = Math.max(10, radiusZ - wallInset);
+    const corners = [
+      { sx: -1, sz: -1 },
+      { sx: 1, sz: -1 },
+      { sx: -1, sz: 1 },
+      { sx: 1, sz: 1 },
+    ];
+    const c = corners[Math.max(0, Math.min(corners.length - 1, slotIndex))];
+    const x = centerX + c.sx * safeRadiusX * 0.68;
+    const z = centerZ + c.sz * safeRadiusZ * 0.68;
+    const toCenterX = centerX - x;
+    const toCenterZ = centerZ - z;
+    const heading = Math.atan2(toCenterX, toCenterZ);
+    const nx = (x - centerX) / Math.max(1, radiusX);
+    const nz = (z - centerZ) / Math.max(1, radiusZ);
+    const radialNorm = Math.min(1, Math.hypot(nx, nz));
+    const bowlY = floorY + radialNorm * radialNorm * DEFAULT_ARENA_BOWL_RISE;
+    return { x, y: bowlY + 0.5, z, heading };
+  }
+  const frame = buildSimStartFrame(routePoints, layout);
   const o = lateralOffsets[slotIndex] ?? (4.2 - slotIndex * 2.8);
   return {
     x: frame.x + frame.rightX * o,
@@ -765,10 +987,10 @@ export function buildSimStartSlotPose(
 
 export function getBasicAiInput(
   state: SimBasicAiState,
-  mainPoints: SimTrackPoint[],
-  allPoints: SimTrackPoint[],
+  mainPoints: SimRoutePoint[],
+  allPoints: SimRoutePoint[],
 ): SimInput {
-  const info = getTrackInfo(state.x, state.y, state.z, mainPoints, allPoints);
+  const info = getRouteInfo(state.x, state.y, state.z, mainPoints, allPoints);
   const desired = Math.atan2(info.dirX, info.dirZ);
   let delta = desired - state.heading;
   while (delta > Math.PI) delta -= Math.PI * 2;
@@ -784,12 +1006,16 @@ export function getBasicAiInput(
 
 export function getAdvancedAiInput(
   state: SimAdvancedAiState,
-  trackPoints: SimTrackPoint[],
+  routePoints: SimRoutePoint[],
   runtime: SimAdvancedAiRuntime,
   dtSec: number,
+  mode: GameMode = 'classic',
+  opponents: Array<{ x: number; y: number; z: number; finished: boolean; chainLength: number }> = [],
+  playerIndex = -1,
   randomFn: () => number = Math.random,
+  arenaLayout = false,
 ): SimInput {
-  const n = trackPoints.length;
+  const n = routePoints.length;
   if (n <= 0) {
     return { forward: true, backward: false, left: false, right: false, drift: false };
   }
@@ -797,8 +1023,8 @@ export function getAdvancedAiInput(
   let bestDist = Infinity;
   let bestIdx = 0;
   for (let i = 0; i < n; i++) {
-    const dx = state.x - trackPoints[i].x;
-    const dz = state.z - trackPoints[i].z;
+    const dx = state.x - routePoints[i].x;
+    const dz = state.z - routePoints[i].z;
     const d = dx * dx + dz * dz;
     if (d < bestDist) {
       bestDist = d;
@@ -808,11 +1034,63 @@ export function getAdvancedAiInput(
   runtime.aiLastWaypointIdx = bestIdx;
   const lookAhead = Math.min(8, Math.max(5, Math.floor(state.speed * 0.3)));
   const targetIdx = (bestIdx + lookAhead) % n;
-  const target = trackPoints[targetIdx];
-
-  const dx = target.x - state.x;
-  const dz = target.z - state.z;
-  const targetAngle = Math.atan2(dx, dz);
+  const target = routePoints[targetIdx];
+  let targetAngle = Math.atan2(target.x - state.x, target.z - state.z);
+  let arenaCenterX = 0;
+  let arenaCenterZ = 0;
+  let arenaRadiusX = 84;
+  let arenaRadiusZ = 74;
+  if (arenaLayout && n > 0) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const p of routePoints) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z);
+      maxZ = Math.max(maxZ, p.z);
+    }
+    arenaCenterX = (minX + maxX) * 0.5;
+    arenaCenterZ = (minZ + maxZ) * 0.5;
+    arenaRadiusX = Math.max(12, (maxX - minX) * 0.5);
+    arenaRadiusZ = Math.max(12, (maxZ - minZ) * 0.5);
+  }
+  if (mode === 'derby' && playerIndex >= 0 && state.chainLength >= 3) {
+    let nearestIdx = -1;
+    let nearestDist2 = 42 * 42;
+    for (let i = 0; i < opponents.length; i++) {
+      if (i === playerIndex) continue;
+      const opp = opponents[i];
+      if (!opp || opp.finished || opp.chainLength <= 0) continue;
+      const odx = opp.x - state.x;
+      const odz = opp.z - state.z;
+      const d2 = odx * odx + odz * odz;
+      if (d2 < nearestDist2) {
+        nearestDist2 = d2;
+        nearestIdx = i;
+      }
+    }
+    if (nearestIdx >= 0) {
+      const opp = opponents[nearestIdx];
+      const attackAngle = Math.atan2(opp.x - state.x, opp.z - state.z);
+      const blend = arenaLayout ? 0.8 : 0.45;
+      targetAngle = targetAngle + Math.atan2(Math.sin(attackAngle - targetAngle), Math.cos(attackAngle - targetAngle)) * blend;
+    } else if (arenaLayout) {
+      const centerAngle = Math.atan2(arenaCenterX - state.x, arenaCenterZ - state.z);
+      targetAngle = centerAngle;
+    }
+  }
+  if (arenaLayout) {
+    const nx = (state.x - arenaCenterX) / Math.max(1, arenaRadiusX);
+    const nz = (state.z - arenaCenterZ) / Math.max(1, arenaRadiusZ);
+    const edgePressure = Math.hypot(nx, nz);
+    if (edgePressure > 0.8) {
+      const centerAngle = Math.atan2(arenaCenterX - state.x, arenaCenterZ - state.z);
+      const edgeBlend = Math.min(1, (edgePressure - 0.8) / 0.2);
+      targetAngle = targetAngle + Math.atan2(Math.sin(centerAngle - targetAngle), Math.cos(centerAngle - targetAngle)) * edgeBlend;
+    }
+  }
   let angleDiff = targetAngle - state.heading;
   while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
   while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
@@ -827,7 +1105,9 @@ export function getAdvancedAiInput(
   const steerThreshold = 0.05;
   const left = angleDiff > steerThreshold;
   const right = angleDiff < -steerThreshold;
-  const driftThreshold = state.chainLength <= 2 ? 0.75 : 0.5;
+  const driftThreshold = mode === 'derby'
+    ? (state.chainLength <= 2 ? 0.9 : 0.62)
+    : (state.chainLength <= 2 ? 0.75 : 0.5);
   const sharpCorner = Math.abs(angleDiff) > driftThreshold && state.speed > 12;
   const veryWrong = Math.abs(angleDiff) > 1.2 && state.speed > 15;
 
@@ -845,10 +1125,34 @@ export function stepRace(
   inputs: SimInput[],
   dtSec: number,
   raceBalanceAssistByPlayer?: number[],
+  mode: GameMode = 'classic',
 ): SimRaceStepResult {
   const events: SimRaceEvent[] = [];
   state.tick += 1;
   state.timeMs += dtSec * 1000;
+  const isArenaLayout = state.layoutType === 'arena';
+  const arenaObstacles = isArenaLayout ? (state.interiorObstacles ?? []) : [];
+
+  let arenaCenterX = 0;
+  let arenaCenterZ = 0;
+  let arenaRadiusX = 84;
+  let arenaRadiusZ = 74;
+  if (isArenaLayout && state.routeMain.length > 0) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const p of state.routeMain) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z);
+      maxZ = Math.max(maxZ, p.z);
+    }
+    arenaCenterX = (minX + maxX) * 0.5;
+    arenaCenterZ = (minZ + maxZ) * 0.5;
+    arenaRadiusX = Math.max(20, (maxX - minX) * 0.5 - 1.2);
+    arenaRadiusZ = Math.max(20, (maxZ - minZ) * 0.5 - 1.2);
+  }
 
   for (let i = 0; i < state.players.length; i++) {
     const p = state.players[i];
@@ -885,21 +1189,155 @@ export function stepRace(
 
     p.x += Math.sin(res.moveAngle) * p.speed * dtSec;
     p.z += Math.cos(res.moveAngle) * p.speed * dtSec;
-    const info = getTrackInfo(p.x, p.y, p.z, state.trackMain, state.trackAll);
+    const info = getRouteInfo(p.x, p.y, p.z, state.routeMain, state.routeAll);
 
-    const margin = info.halfWidth - 0.8;
-    if (Math.abs(info.offset) > margin) {
-      const sign = info.offset > 0 ? 1 : -1;
-      const push = Math.abs(info.offset) - margin;
-      p.x -= info.rightX * sign * push;
-      p.z -= info.rightZ * sign * push;
+    const loopInfluence = Math.min(1, Math.max(0, info.loopBlend));
+    const tunnelInfluence = Math.min(1, Math.max(0, info.tunnelBlend));
+    let arenaRoadY = info.elevation + 0.5;
+    if (isArenaLayout) {
+      // Resolve collisions against arena interior obstacle cylinders.
+      for (const obs of arenaObstacles) {
+        const ox = arenaCenterX + obs.x;
+        const oz = arenaCenterZ + obs.z;
+        const dx = p.x - ox;
+        const dz = p.z - oz;
+        const dist = Math.hypot(dx, dz);
+        const kartRadius = 1.05;
+        const hitRadius = Math.max(1, obs.radius) + kartRadius;
+        if (dist < hitRadius) {
+          const nx = dist > 1e-5 ? dx / dist : 1;
+          const nz = dist > 1e-5 ? dz / dist : 0;
+          p.x = ox + nx * hitRadius;
+          p.z = oz + nz * hitRadius;
+          p.speed *= 0.72;
+          rt.slowMs = Math.max(rt.slowMs, 220);
+        }
+      }
+      const dx = p.x - arenaCenterX;
+      const dz = p.z - arenaCenterZ;
+      const nx = dx / Math.max(1, arenaRadiusX);
+      const nz = dz / Math.max(1, arenaRadiusZ);
+      const nLen = Math.hypot(nx, nz);
+      if (nLen > 1) {
+        const inv = 1 / nLen;
+        p.x = arenaCenterX + dx * inv;
+        p.z = arenaCenterZ + dz * inv;
+        p.speed *= 0.92;
+      }
+      const nx2 = (p.x - arenaCenterX) / Math.max(1, arenaRadiusX);
+      const nz2 = (p.z - arenaCenterZ) / Math.max(1, arenaRadiusZ);
+      const radialNorm = Math.min(1, Math.hypot(nx2, nz2));
+      arenaRoadY = info.elevation + 0.5 + radialNorm * radialNorm * DEFAULT_ARENA_BOWL_RISE;
+    } else {
+      const margin = info.halfWidth - (tunnelInfluence > 0.01 ? 0.15 : 0.8);
+      if (Math.abs(info.offset) > margin) {
+        const sign = info.offset > 0 ? 1 : -1;
+        const push = Math.abs(info.offset) - margin;
+        p.x -= info.rightX * sign * push;
+        p.z -= info.rightZ * sign * push;
+      }
+    }
+    if (tunnelInfluence > 0.01) {
+      // Tunnel ring steering should match player expectation:
+      // left input moves toward left side of tunnel, right toward right side.
+      const steer = (simInput.left ? 1 : 0) - (simInput.right ? 1 : 0);
+      const speedRatio = Math.min(1, Math.abs(p.speed) / Math.max(1, tuning.maxSpeed));
+      const rollRate = 2.8 + speedRatio * 1.7;
+      const normalizeAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+      const prevAngle = rt.tunnelAngle;
+      if (steer !== 0) rt.tunnelAngle += steer * rollRate * dtSec;
+      rt.tunnelAngle = normalizeAngle(rt.tunnelAngle);
+      // Tunnel half-wall acts as a hard blocker in ring-space: no side teleport.
+      if (info.tunnelWall) {
+        const blockedHalfAngle = 1.02;
+        const centerAngle =
+          info.tunnelWallSide === 'left'
+            ? -Math.PI * 0.5
+            : info.tunnelWallSide === 'right'
+              ? Math.PI * 0.5
+              : 0;
+        const delta = normalizeAngle(rt.tunnelAngle - centerAngle);
+        const prevDelta = normalizeAngle(prevAngle - centerAngle);
+        if (Math.abs(delta) < blockedHalfAngle) {
+          const edgeSign = Math.sign(prevDelta) !== 0
+            ? Math.sign(prevDelta)
+            : Math.sign(delta) !== 0
+              ? Math.sign(delta)
+              : (steer >= 0 ? 1 : -1);
+          const edgeAngle = centerAngle + edgeSign * blockedHalfAngle;
+          // Pin to nearest allowed edge with tiny outward bias so next step remains outside.
+          rt.tunnelAngle = normalizeAngle(edgeAngle + edgeSign * 0.03);
+          p.speed *= 0.62;
+          rt.slowMs = Math.max(rt.slowMs, 120);
+        }
+      }
+      const tunnelRadius = Math.max(2.4, info.halfWidth * 0.8);
+      const kartContactInset = 0.34;
+      const contactRadius = Math.max(1.25, tunnelRadius - kartContactInset);
+      // As tunnel influence fades near exits, gradually unwind ring angle so
+      // karts rejoin road orientation instead of dropping from side/top wall.
+      const exitAssist = Math.min(1, Math.max(0, (0.55 - tunnelInfluence) / 0.55));
+      if (exitAssist > 0) {
+        const unwind = Math.min(1, dtSec * 8 * exitAssist);
+        rt.tunnelAngle += (0 - rt.tunnelAngle) * unwind;
+      }
+      const relX = p.x - info.centerX;
+      const relZ = p.z - info.centerZ;
+      // Preserve forward travel along tunnel while steering only changes ring position.
+      const along = relX * info.dirX + relZ * info.dirZ;
+      const lateral = Math.sin(rt.tunnelAngle) * contactRadius;
+      const targetX = info.centerX + info.dirX * along + info.rightX * lateral;
+      const targetZ = info.centerZ + info.dirZ * along + info.rightZ * lateral;
+      const tunnelCenterY = info.elevation + 0.5 + tunnelRadius;
+      const tunnelY = tunnelCenterY - Math.cos(rt.tunnelAngle) * contactRadius;
+      const roadY = info.elevation + 0.5;
+      const targetY = tunnelY * (1 - exitAssist) + roadY * exitAssist;
+      const blend = Math.min(1, Math.max(0.04, Math.pow(tunnelInfluence, 1.6)));
+      p.x = p.x + (targetX - p.x) * blend;
+      p.z = p.z + (targetZ - p.z) * blend;
+      p.y = p.y + (targetY - p.y) * blend;
+      // In tunnel, keep heading aligned with road direction for straight-driving feel.
+      const tunnelHeading = Math.atan2(info.dirX, info.dirZ);
+      const headingDelta = Math.atan2(Math.sin(tunnelHeading - p.heading), Math.cos(tunnelHeading - p.heading));
+      p.heading += headingDelta * blend;
+      rt.airborne = false;
+      rt.vy = 0;
+      rt.airborneElapsed = 0;
+    } else if (loopInfluence > 0.01) {
+      // Magnetic adhesion for loops: hold kart to track when geometry gets steep.
+      const roadY = info.elevation + 0.5;
+      const stick = Math.min(1, 0.45 + loopInfluence * 0.55);
+      p.y = p.y + (roadY - p.y) * stick;
+      const loopMargin = Math.max(0.3, info.halfWidth - 0.45);
+      if (Math.abs(info.offset) > loopMargin) {
+        const sign = info.offset > 0 ? 1 : -1;
+        const push = Math.abs(info.offset) - loopMargin;
+        p.x -= info.rightX * sign * push;
+        p.z -= info.rightZ * sign * push;
+        p.speed *= 0.96;
+      }
+      const loopHeading = Math.atan2(info.dirX, info.dirZ);
+      const headingDelta = Math.atan2(Math.sin(loopHeading - p.heading), Math.cos(loopHeading - p.heading));
+      p.heading += headingDelta * Math.min(1, 0.2 + loopInfluence * 0.5);
+      p.speed = Math.max(p.speed, tuning.maxSpeed * (0.52 + 0.22 * loopInfluence));
+      rt.airborne = false;
+      rt.vy = 0;
+      rt.airborneElapsed = 0;
+    } else if (rt.tunnelAngle !== 0) {
+      rt.tunnelAngle *= Math.max(0, 1 - dtSec * 4);
+      if (Math.abs(rt.tunnelAngle) < 0.01) rt.tunnelAngle = 0;
     }
 
-    if (!rt.airborne && info.ramp && p.speed > 10) {
+    if (!rt.airborne && info.ramp && p.speed > 10 && loopInfluence < 0.08 && tunnelInfluence < 0.08) {
       rt.airborne = true;
       rt.airborneElapsed = 0;
       rt.vy = 12 + p.speed * 0.3;
       events.push({ type: 'jump_start', playerIndex: i });
+    }
+    if (!rt.airborne && info.boost) {
+      // Track boost strips continuously top up short boost time and enforce a strong minimum speed.
+      rt.speedBoostMs = Math.max(rt.speedBoostMs, 120);
+      p.speed = Math.max(p.speed, tuning.maxSpeed * 1.25);
     }
     if (rt.airborne) {
       rt.airborneElapsed += dtSec;
@@ -912,12 +1350,28 @@ export function stepRace(
         p.y = info.elevation + 0.5;
         events.push({ type: 'land', playerIndex: i });
       }
-    } else {
-      p.y = info.elevation + 0.5;
+    } else if (tunnelInfluence <= 0.01) {
+      const roadY = isArenaLayout ? arenaRoadY : info.elevation + 0.5;
+      // Smooth settle after leaving tunnel so exit doesn't snap.
+      if (Math.abs(rt.tunnelAngle) > 0.01) {
+        const settle = Math.min(1, dtSec * 10);
+        p.y += (roadY - p.y) * settle;
+      } else {
+        p.y = roadY;
+      }
+    }
+    if (!rt.airborne) {
+      const roadY = isArenaLayout ? arenaRoadY : info.elevation + 0.5;
+      // Safety clamp: avoid non-physical post-tunnel "drop" artifacts.
+      if (p.y > roadY + 0.55) {
+        p.y = roadY + (p.y - roadY) * Math.max(0, 1 - dtSec * 18);
+      } else if (p.y < roadY - 0.55) {
+        p.y = roadY;
+      }
     }
 
     const cpCount = state.checkpoints.length;
-    if (cpCount > 0) {
+    if (cpCount > 0 && mode === 'classic') {
       const oldCp = p.lastCheckpoint;
       const next = (oldCp + 1 + cpCount) % cpCount;
       const cp = state.checkpoints[next];
@@ -1209,12 +1663,14 @@ export function shouldAiUseItem(
   playerIndex: number,
   players: SimItemPlayerState[],
   item: ItemId,
+  mode: GameMode = 'classic',
   randomFn: () => number = Math.random,
 ): boolean {
-  if (item === 'ln_turbo') return randomFn() < 0.22;
-  if (item === 'mempool_mine') return randomFn() < 0.18;
-  if (item === 'fee_spike') return findNearestOpponent(playerIndex, players) >= 0 && randomFn() < 0.35;
-  if (item === 'sats_siphon') return findNearestOpponent(playerIndex, players, true) >= 0 && randomFn() < 0.38;
+  const derbyBias = mode === 'derby';
+  if (item === 'ln_turbo') return randomFn() < (derbyBias ? 0.34 : 0.22);
+  if (item === 'mempool_mine') return randomFn() < (derbyBias ? 0.26 : 0.18);
+  if (item === 'fee_spike') return findNearestOpponent(playerIndex, players) >= 0 && randomFn() < (derbyBias ? 0.48 : 0.35);
+  if (item === 'sats_siphon') return findNearestOpponent(playerIndex, players, true) >= 0 && randomFn() < (derbyBias ? 0.52 : 0.38);
   if (item === 'nostr_zap') {
     const p = players[playerIndex];
     for (let i = 0; i < players.length; i++) {
@@ -1226,7 +1682,7 @@ export function shouldAiUseItem(
       const dz = p.z - opp.z;
       if (dx * dx + dy * dy + dz * dz <= 18 * 18) return true;
     }
-    return randomFn() < 0.14;
+    return randomFn() < (derbyBias ? 0.22 : 0.14);
   }
   return false;
 }
@@ -1299,6 +1755,7 @@ export function shouldEnableFinalLapIntensity(
 export function computePlacements(
   players: SimPlacementPlayer[],
   checkpointCount: number,
+  mode: GameMode = 'classic',
 ): number[] {
   const rows = players.map((p, i) => ({
     i,
@@ -1309,6 +1766,12 @@ export function computePlacements(
     chainLength: p.chainLength,
   }));
   rows.sort((a, b) => {
+    if (mode === 'derby') {
+      if (a.eliminated !== b.eliminated) return a.eliminated ? 1 : -1;
+      if (a.chainLength !== b.chainLength) return b.chainLength - a.chainLength;
+      if (a.progress !== b.progress) return b.progress - a.progress;
+      return a.i - b.i;
+    }
     if (a.finished !== b.finished) return a.finished ? -1 : 1;
     if (a.finished && b.finished && a.finishTime !== b.finishTime) return a.finishTime - b.finishTime;
     if (a.eliminated !== b.eliminated) return a.eliminated ? 1 : -1;
@@ -1321,7 +1784,16 @@ export function computePlacements(
 export function shouldEndRace(
   players: Array<{ finished: boolean; eliminated: boolean }>,
   minFinishers = 3,
+  mode: GameMode = 'classic',
+  raceTimeMs = 0,
 ): boolean {
+  if (mode === 'derby') {
+    const aliveCount = players.filter(p => !p.eliminated).length;
+    if (aliveCount <= 1) return true;
+    if (aliveCount === 0) return true;
+    if (raceTimeMs >= DERBY_MAX_TIME_MS) return true;
+    return false;
+  }
   const finishedCount = players.filter(p => p.finished).length;
   const aliveCount = players.filter(p => !p.eliminated).length;
   const canStillReachMinFinishers = aliveCount >= minFinishers;
@@ -1338,12 +1810,13 @@ const sim = {
   createSimRandomState,
   nextSimRandom,
   createDefaultRuntimeState,
-  getTrackInfo,
-  buildSimTrackPointsFromControlPoints,
-  buildDefaultSimMainTrackPoints,
-  buildSimShortcutTrackPoints,
-  buildSimMainTrackPoints,
-  buildSimTrackPoints,
+  getRouteInfo,
+  buildSimArenaMainRoutePoints,
+  buildSimRoutePointsFromControlPoints,
+  buildDefaultSimMainRoutePoints,
+  buildSimShortcutRoutePoints,
+  buildSimMainRoutePoints,
+  buildSimRoutePoints,
   buildSimCheckpoints,
   buildItemBoxPositions,
   buildSimItemBoxes,

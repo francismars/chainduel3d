@@ -2,7 +2,8 @@ import {
   ChatMessage,
   OnlineRaceSnapshot,
   OnlineRaceInput,
-  TrackCustomLayout,
+  GameMode,
+  RouteCustomLayout,
   RoomClientMessage,
   RoomServerMessage,
   RoomState,
@@ -41,7 +42,14 @@ export class RoomClient {
     this.memberToken = memberToken;
   }
 
-  async createRoom(hostName: string, laps: number, aiCount: number, spectatorHost = false, trackId = 'default') {
+  async createRoom(
+    hostName: string,
+    laps: number,
+    aiCount: number,
+    spectatorHost = false,
+    routeId = 'default',
+    mode: GameMode = 'classic',
+  ) {
     const res = await fetch('/api/rooms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -52,7 +60,8 @@ export class RoomClient {
           aiCount,
           maxHumans: 4,
           chainClasses: ['balanced', 'balanced', 'balanced', 'balanced'],
-          trackId,
+          routeId,
+          mode,
         },
         spectatorHost,
       }),
@@ -82,7 +91,7 @@ export class RoomClient {
     return data as { room: RoomState; memberId: string; memberToken: string };
   }
 
-  async patchSettings(settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; trackId: string }>) {
+  async patchSettings(settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; routeId: string; mode: GameMode }>) {
     const id = this.getRequiredIdentity();
     await fetch(`/api/rooms/${id.roomId}/settings`, {
       method: 'POST',
@@ -95,7 +104,7 @@ export class RoomClient {
     });
   }
 
-  async startRace(trackLayout?: TrackCustomLayout | null, trackId?: string) {
+  async startRace(routeLayout?: RouteCustomLayout | null, routeId?: string) {
     const id = this.getRequiredIdentity();
     const res = await fetch(`/api/rooms/${id.roomId}/start`, {
       method: 'POST',
@@ -103,8 +112,8 @@ export class RoomClient {
       body: JSON.stringify({
         memberId: id.memberId,
         memberToken: id.memberToken,
-        trackLayout: trackLayout ?? null,
-        trackId,
+        routeLayout: routeLayout ?? null,
+        routeId,
       }),
     });
     if (!res.ok) {

@@ -1,21 +1,21 @@
-import { GAME_CONFIG } from 'shared/types';
+import { GAME_CONFIG, GameMode } from 'shared/types';
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { ChainClass } from '../game/Kart';
+import { ChainClass } from '../game/ChainRider';
 import {
-  DEFAULT_TRACK_EDITOR_PARAMS,
-  Track,
-  TrackControlPoint,
-  TrackCustomLayout,
-  TrackEditorParams,
-  TrackShortcutControlPoint,
-} from '../game/Track';
+  DEFAULT_ROUTE_EDITOR_PARAMS,
+  Route,
+  RouteControlPoint,
+  RouteCustomLayout,
+  RouteEditorParams,
+  RouteShortcutControlPoint,
+} from '../game/Route';
 
-type TrackOption = { id: string; name: string };
+type RouteOption = { id: string; name: string };
 
 export class LobbyUI {
   private container: HTMLElement;
-  private tracks: TrackOption[] = [{ id: 'default', name: 'Default Track' }];
+  private routes: RouteOption[] = [{ id: 'default', name: 'Genesis Route' }];
   private onStart: (
     playerNames: string[],
     isAI: boolean[],
@@ -23,7 +23,8 @@ export class LobbyUI {
     wager: number,
     laps: number,
     skipPayment: boolean,
-    trackId: string,
+    routeId: string,
+    mode: GameMode,
   ) => void;
 
   constructor(
@@ -35,15 +36,16 @@ export class LobbyUI {
       wager: number,
       laps: number,
       skipPayment: boolean,
-      trackId: string,
+      routeId: string,
+      mode: GameMode,
     ) => void,
   ) {
     this.container = container;
     this.onStart = onStart;
   }
 
-  setTracks(tracks: TrackOption[]) {
-    this.tracks = tracks.length > 0 ? tracks : [{ id: 'default', name: 'Default Track' }];
+  setRoutes(routes: RouteOption[]) {
+    this.routes = routes.length > 0 ? routes : [{ id: 'default', name: 'Genesis Route' }];
   }
 
   show() {
@@ -58,7 +60,7 @@ export class LobbyUI {
 
     // Title with glow
     const title = document.createElement('h1');
-    title.textContent = 'CHAIN RACE';
+    title.textContent = 'CHAINDUEL3D';
     title.style.cssText = `
       font-size: 72px; margin: 0 0 8px 0; letter-spacing: 12px;
       text-shadow: 0 0 28px rgba(255,255,255,0.28), 0 0 70px rgba(255,255,255,0.08);
@@ -67,7 +69,7 @@ export class LobbyUI {
     wrapper.appendChild(title);
 
     const subtitle = document.createElement('div');
-    subtitle.textContent = 'BITCOIN CIRCUIT';
+    subtitle.textContent = 'ANATOMY OF BITCOIN CHAINS';
     subtitle.style.cssText = `
       font-size: 14px; color: #9f9f9f; margin-bottom: 34px; letter-spacing: 6px;
       text-shadow: 0 0 18px rgba(255,255,255,0.1);
@@ -166,30 +168,45 @@ export class LobbyUI {
     form.appendChild(makeField('LAPS [1-9]', 'laps', String(GAME_CONFIG.TOTAL_LAPS), 'number'));
     form.appendChild(makeField(`WAGER (sats) [${GAME_CONFIG.MIN_WAGER}-${GAME_CONFIG.MAX_WAGER}]`, 'wager', '1000', 'number'));
     const trackSelect = document.createElement('select');
-    trackSelect.id = 'track_id';
+    trackSelect.id = 'route_id';
     trackSelect.style.cssText = `
       width: 100%; padding: 10px; background: #111; border: 1px solid #333;
       border-radius: 4px; color: #f1f1f1; font-family: 'Courier New', monospace;
       font-size: 14px; outline: none;
     `;
-    for (const track of this.tracks) {
+    for (const route of this.routes) {
       const opt = document.createElement('option');
-      opt.value = track.id;
-      opt.textContent = track.name;
+      opt.value = route.id;
+      opt.textContent = route.name;
       trackSelect.appendChild(opt);
     }
     const trackWrap = document.createElement('div');
     trackWrap.style.cssText = 'margin-bottom: 16px;';
     const trackLabel = document.createElement('label');
-    trackLabel.textContent = 'TRACK';
+    trackLabel.textContent = 'ROUTE';
     trackLabel.style.cssText = 'display: block; margin-bottom: 4px; font-size: 12px; color: #8a8a8a;';
     trackWrap.appendChild(trackLabel);
     trackWrap.appendChild(trackSelect);
     form.appendChild(trackWrap);
+    const modeSelect = document.createElement('select');
+    modeSelect.id = 'game_mode';
+    modeSelect.style.cssText = trackSelect.style.cssText;
+    modeSelect.innerHTML = `
+      <option value="classic" selected>CLASSIC RACE</option>
+      <option value="derby">DERBY MODE</option>
+    `;
+    const modeWrap = document.createElement('div');
+    modeWrap.style.cssText = 'margin-bottom: 16px;';
+    const modeLabel = document.createElement('label');
+    modeLabel.textContent = 'GAME MODE';
+    modeLabel.style.cssText = 'display: block; margin-bottom: 4px; font-size: 12px; color: #8a8a8a;';
+    modeWrap.appendChild(modeLabel);
+    modeWrap.appendChild(modeSelect);
+    form.appendChild(modeWrap);
 
     // Race button
     const raceBtn = document.createElement('button');
-    raceBtn.textContent = 'START CHAIN RACE';
+    raceBtn.textContent = 'START CHAIN DUEL';
     raceBtn.style.cssText = `
       width: 100%; padding: 14px; margin-top: 8px;
       background: linear-gradient(135deg, #efefef, #cfcfcf);
@@ -289,9 +306,11 @@ export class LobbyUI {
     const clampedLaps = Math.max(1, Math.min(9, Number.isFinite(lapsRaw) ? lapsRaw : GAME_CONFIG.TOTAL_LAPS));
     const wager = parseInt((document.getElementById('wager') as HTMLInputElement)?.value || '1000');
     const clampedWager = Math.max(GAME_CONFIG.MIN_WAGER, Math.min(GAME_CONFIG.MAX_WAGER, wager));
-    const trackId = (document.getElementById('track_id') as HTMLSelectElement)?.value || 'default';
+    const routeId = (document.getElementById('route_id') as HTMLSelectElement)?.value || 'default';
+    const modeRaw = (document.getElementById('game_mode') as HTMLSelectElement)?.value;
+    const mode: GameMode = modeRaw === 'derby' ? 'derby' : 'classic';
 
-    this.onStart(names, isAI, chainClasses, clampedWager, clampedLaps, skipPayment, trackId);
+    this.onStart(names, isAI, chainClasses, clampedWager, clampedLaps, skipPayment, routeId, mode);
   }
 
   private startAiOnlyLocalWatch() {
@@ -300,11 +319,13 @@ export class LobbyUI {
     const names = ['AI 1', 'AI 2', 'AI 3', 'AI 4'];
     const isAI = [true, true, true, true];
     const chainClasses: ChainClass[] = ['balanced', 'balanced', 'balanced', 'balanced'];
-    const trackId = (document.getElementById('track_id') as HTMLSelectElement)?.value || 'default';
-    this.onStart(names, isAI, chainClasses, GAME_CONFIG.MIN_WAGER, clampedLaps, true, trackId);
+    const routeId = (document.getElementById('route_id') as HTMLSelectElement)?.value || 'default';
+    const modeRaw = (document.getElementById('game_mode') as HTMLSelectElement)?.value;
+    const mode: GameMode = modeRaw === 'derby' ? 'derby' : 'classic';
+    this.onStart(names, isAI, chainClasses, GAME_CONFIG.MIN_WAGER, clampedLaps, true, routeId, mode);
   }
 
-  public showTrackEditor() {
+  public showRouteEditor() {
     const modal = document.createElement('div');
     modal.style.cssText = `
       position:absolute; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
@@ -319,13 +340,13 @@ export class LobbyUI {
     `;
 
     const title = document.createElement('div');
-    title.textContent = 'TRACK EDITOR (APPLIES TO NEXT RACE)';
+    title.textContent = 'ROUTE EDITOR (APPLIES TO NEXT DUEL)';
     title.style.cssText = 'font-size:14px;letter-spacing:1px;color:#fff;margin-bottom:10px;';
     card.appendChild(title);
 
-    const params = Track.getEditorParams();
+    const params = Route.getEditorParams();
     const controls: Array<{
-      key: keyof TrackEditorParams;
+      key: keyof RouteEditorParams;
       label: string;
       min: number;
       max: number;
@@ -387,7 +408,7 @@ export class LobbyUI {
     saveBtn.style.cssText = 'flex:1;padding:10px;background:#e5e5e5;color:#000;border:none;border-radius:4px;font-weight:bold;cursor:pointer;';
     saveBtn.onclick = () => {
       params.numSegments = Math.round(params.numSegments);
-      Track.setEditorParams(params);
+      Route.setEditorParams(params);
       saveBtn.textContent = 'SAVED';
       setTimeout(() => (saveBtn.textContent = 'SAVE'), 700);
     };
@@ -396,9 +417,9 @@ export class LobbyUI {
     resetBtn.textContent = 'RESET DEFAULT';
     resetBtn.style.cssText = 'flex:1;padding:10px;background:#1a1a1a;color:#cfcfcf;border:1px solid #333;border-radius:4px;cursor:pointer;';
     resetBtn.onclick = () => {
-      Track.setEditorParams({ ...DEFAULT_TRACK_EDITOR_PARAMS });
+      Route.setEditorParams({ ...DEFAULT_ROUTE_EDITOR_PARAMS });
       modal.remove();
-      this.showTrackEditor();
+      this.showRouteEditor();
     };
 
     const closeBtn = document.createElement('button');
@@ -415,8 +436,16 @@ export class LobbyUI {
     this.container.appendChild(modal);
   }
 
-  private defaultCustomLayout(): TrackCustomLayout {
+  private defaultCustomLayout(): RouteCustomLayout {
     return {
+      layoutType: 'loop',
+      arenaShape: 'circle',
+      arenaRadiusX: 84,
+      arenaRadiusZ: 74,
+      arenaFloorY: 4,
+      arenaWallHeight: 7,
+      arenaObstacleDensity: 0,
+      interiorObstacles: [],
       main: [
         { x: -80, z: -20, w: 12, e: 4 },
         { x: -40, z: -88, w: 12, e: 5 },
@@ -433,16 +462,17 @@ export class LobbyUI {
         { x: -6, z: 34, e: 9 },
         { x: -38, z: 60, e: 7 },
       ],
+      showCenterpiece: true,
     };
   }
 
-  public showGraphicalTrackBuilder() {
-    const stored = Track.getCustomLayout();
+  public showGraphicalRouteBuilder() {
+    const stored = Route.getCustomLayout();
     const seed = stored ?? this.defaultCustomLayout();
     const state: {
       mode: 'main' | 'shortcut';
-      main: TrackControlPoint[];
-      shortcut: TrackShortcutControlPoint[];
+      main: RouteControlPoint[];
+      shortcut: RouteShortcutControlPoint[];
       selected: number;
       draggingPoint: boolean;
       miniDraggingPoint: boolean;
@@ -452,6 +482,13 @@ export class LobbyUI {
       insertAfterIndex: number;
       connectionMode: 'after' | 'between';
       pendingConnectFirst: number;
+      showCenterpiece: boolean;
+      layoutType: 'loop' | 'arena';
+      arenaShape: 'circle' | 'rounded_rect';
+      arenaRadiusX: number;
+      arenaRadiusZ: number;
+      arenaFloorY: number;
+      arenaWallHeight: number;
     } = {
       mode: 'main',
       main: seed.main.map(p => ({ ...p })),
@@ -465,6 +502,13 @@ export class LobbyUI {
       insertAfterIndex: -1,
       connectionMode: 'after',
       pendingConnectFirst: -1,
+      showCenterpiece: seed.showCenterpiece ?? true,
+      layoutType: seed.layoutType === 'arena' ? 'arena' : 'loop',
+      arenaShape: seed.arenaShape === 'rounded_rect' ? 'rounded_rect' : 'circle',
+      arenaRadiusX: Math.max(24, seed.arenaRadiusX ?? 84),
+      arenaRadiusZ: Math.max(24, seed.arenaRadiusZ ?? 74),
+      arenaFloorY: seed.arenaFloorY ?? 4,
+      arenaWallHeight: Math.max(2, seed.arenaWallHeight ?? 7),
     };
 
     const modal = document.createElement('div');
@@ -512,7 +556,7 @@ export class LobbyUI {
     const panel = document.createElement('div');
     panel.style.cssText = 'padding:12px;border-left:1px solid #222;color:#d0d0d0;overflow:auto;';
     const title = document.createElement('div');
-    title.textContent = 'GRAPHICAL TRACK BUILDER';
+    title.textContent = 'GRAPHICAL ROUTE BUILDER';
     title.style.cssText = 'font-size:14px;color:#fff;letter-spacing:1px;margin-bottom:10px;';
     panel.appendChild(title);
 
@@ -538,6 +582,80 @@ export class LobbyUI {
     const selectedLabel = document.createElement('div');
     selectedLabel.style.cssText = 'font-size:11px;color:#8f8f8f;margin-bottom:6px;';
     panel.appendChild(selectedLabel);
+    const centerpieceRow = document.createElement('label');
+    centerpieceRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:11px;color:#bdbdbd;';
+    const centerpieceCheck = document.createElement('input');
+    centerpieceCheck.type = 'checkbox';
+    centerpieceCheck.checked = state.showCenterpiece;
+    centerpieceCheck.style.cssText = 'accent-color:#d6d6d6;';
+    centerpieceCheck.onchange = () => {
+      state.showCenterpiece = centerpieceCheck.checked;
+      state.dirtyTrack = true;
+    };
+    centerpieceRow.appendChild(centerpieceCheck);
+    centerpieceRow.appendChild(document.createTextNode('SHOW CENTERPIECE / STATUE'));
+    panel.appendChild(centerpieceRow);
+    const layoutTypeRow = document.createElement('div');
+    layoutTypeRow.style.cssText = 'display:grid;grid-template-columns:92px 1fr;gap:8px;align-items:center;margin-bottom:8px;';
+    const layoutTypeLabel = document.createElement('div');
+    layoutTypeLabel.textContent = 'LAYOUT';
+    layoutTypeLabel.style.cssText = 'font-size:11px;color:#9f9f9f;';
+    const layoutTypeSelect = document.createElement('select');
+    layoutTypeSelect.style.cssText = 'width:100%;padding:6px;background:#111;border:1px solid #333;border-radius:4px;color:#eee;';
+    layoutTypeSelect.innerHTML = `
+      <option value="loop">LOOP</option>
+      <option value="arena">ARENA</option>
+    `;
+    layoutTypeSelect.value = state.layoutType;
+    layoutTypeSelect.onchange = () => {
+      state.layoutType = layoutTypeSelect.value === 'arena' ? 'arena' : 'loop';
+      state.dirtyTrack = true;
+    };
+    layoutTypeRow.appendChild(layoutTypeLabel);
+    layoutTypeRow.appendChild(layoutTypeSelect);
+    panel.appendChild(layoutTypeRow);
+
+    const makeArenaNumber = (label: string, getValue: () => number, onValue: (v: number) => void) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:92px 1fr;gap:8px;align-items:center;margin-bottom:6px;';
+      const l = document.createElement('div');
+      l.textContent = label;
+      l.style.cssText = 'font-size:11px;color:#9f9f9f;';
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = String(getValue());
+      input.style.cssText = 'width:100%;padding:6px;background:#111;border:1px solid #333;border-radius:4px;color:#eee;';
+      input.onchange = () => {
+        onValue(parseFloat(input.value || '0'));
+        state.dirtyTrack = true;
+      };
+      row.appendChild(l);
+      row.appendChild(input);
+      return row;
+    };
+    panel.appendChild(makeArenaNumber('ARENA RX', () => state.arenaRadiusX, v => { state.arenaRadiusX = Math.max(24, Math.min(260, v)); }));
+    panel.appendChild(makeArenaNumber('ARENA RZ', () => state.arenaRadiusZ, v => { state.arenaRadiusZ = Math.max(24, Math.min(260, v)); }));
+    const arenaShapeRow = document.createElement('div');
+    arenaShapeRow.style.cssText = 'display:grid;grid-template-columns:92px 1fr;gap:8px;align-items:center;margin-bottom:6px;';
+    const arenaShapeLabel = document.createElement('div');
+    arenaShapeLabel.textContent = 'ARENA SHAPE';
+    arenaShapeLabel.style.cssText = 'font-size:11px;color:#9f9f9f;';
+    const arenaShapeSelect = document.createElement('select');
+    arenaShapeSelect.style.cssText = 'width:100%;padding:6px;background:#111;border:1px solid #333;border-radius:4px;color:#eee;';
+    arenaShapeSelect.innerHTML = `
+      <option value="circle">CIRCLE</option>
+      <option value="rounded_rect">ROUNDED RECT</option>
+    `;
+    arenaShapeSelect.value = state.arenaShape;
+    arenaShapeSelect.onchange = () => {
+      state.arenaShape = arenaShapeSelect.value === 'rounded_rect' ? 'rounded_rect' : 'circle';
+      state.dirtyTrack = true;
+    };
+    arenaShapeRow.appendChild(arenaShapeLabel);
+    arenaShapeRow.appendChild(arenaShapeSelect);
+    panel.appendChild(arenaShapeRow);
+    panel.appendChild(makeArenaNumber('ARENA Y', () => state.arenaFloorY, v => { state.arenaFloorY = Math.max(-10, Math.min(80, v)); }));
+    panel.appendChild(makeArenaNumber('WALL H', () => state.arenaWallHeight, v => { state.arenaWallHeight = Math.max(2, Math.min(36, v)); }));
 
     const connectLabel = document.createElement('div');
     connectLabel.style.cssText = 'font-size:11px;color:#9f9f9f;margin-bottom:4px;';
@@ -578,7 +696,13 @@ export class LobbyUI {
     saveBtn.textContent = 'SAVE LAYOUT';
     saveBtn.style.cssText = 'padding:10px;border:none;border-radius:4px;background:#e6e6e6;color:#000;font-weight:bold;cursor:pointer;';
     saveBtn.onclick = () => {
-      Track.setCustomLayout({
+      Route.setCustomLayout({
+        layoutType: state.layoutType,
+        arenaShape: state.arenaShape,
+        arenaRadiusX: parseFloat(state.arenaRadiusX.toFixed(2)),
+        arenaRadiusZ: parseFloat(state.arenaRadiusZ.toFixed(2)),
+        arenaFloorY: parseFloat(state.arenaFloorY.toFixed(2)),
+        arenaWallHeight: parseFloat(state.arenaWallHeight.toFixed(2)),
         main: state.main.map(p => ({
           ...p,
           x: parseFloat(p.x.toFixed(2)),
@@ -591,6 +715,9 @@ export class LobbyUI {
           z: parseFloat(p.z.toFixed(2)),
           e: parseFloat(p.e.toFixed(2)),
         })),
+        interiorObstacles: [],
+        arenaObstacleDensity: 0,
+        showCenterpiece: state.showCenterpiece,
       });
       saveBtn.textContent = 'SAVED';
       setTimeout(() => (saveBtn.textContent = 'SAVE LAYOUT'), 700);
@@ -601,10 +728,18 @@ export class LobbyUI {
     resetBtn.textContent = 'CLEAR CUSTOM';
     resetBtn.style.cssText = 'padding:10px;border:1px solid #333;border-radius:4px;background:#131313;color:#bbb;cursor:pointer;';
     resetBtn.onclick = () => {
-      Track.resetCustomLayout();
+      Route.resetCustomLayout();
       const d = this.defaultCustomLayout();
       state.main = d.main.map(p => ({ ...p }));
       state.shortcut = d.shortcut?.map(p => ({ ...p })) ?? [];
+      state.showCenterpiece = d.showCenterpiece ?? true;
+      state.layoutType = d.layoutType === 'arena' ? 'arena' : 'loop';
+      state.arenaShape = d.arenaShape === 'rounded_rect' ? 'rounded_rect' : 'circle';
+      state.arenaRadiusX = d.arenaRadiusX ?? 84;
+      state.arenaRadiusZ = d.arenaRadiusZ ?? 74;
+      state.arenaFloorY = d.arenaFloorY ?? 4;
+      state.arenaWallHeight = d.arenaWallHeight ?? 7;
+      centerpieceCheck.checked = state.showCenterpiece;
       state.selected = -1;
       state.dirtyTrack = true;
       refreshPanel();
@@ -732,8 +867,8 @@ export class LobbyUI {
       } else {
         insertIdx = state.insertSegmentStart + 1;
       }
-      if (state.mode === 'main') state.main.splice(insertIdx, 0, point as TrackControlPoint);
-      else state.shortcut.splice(insertIdx, 0, point as TrackShortcutControlPoint);
+      if (state.mode === 'main') state.main.splice(insertIdx, 0, point as RouteControlPoint);
+      else state.shortcut.splice(insertIdx, 0, point as RouteShortcutControlPoint);
       state.selected = insertIdx;
       state.dirtyTrack = true;
       return true;
@@ -761,7 +896,7 @@ export class LobbyUI {
         ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
       }
       const drawDetailedPath = (
-        pts: Array<{ x: number; z: number; e?: number; w?: number; ramp?: boolean; bridge?: boolean }>,
+        pts: Array<{ x: number; z: number; e?: number; w?: number; ramp?: boolean; bridge?: boolean; boost?: boolean; loop?: boolean; tunnel?: boolean; tunnelWall?: boolean; tunnelWallSide?: 'bottom' | 'left' | 'right' }>,
         mode: 'main' | 'shortcut',
         color: string,
       ) => {
@@ -811,7 +946,7 @@ export class LobbyUI {
       drawDetailedPath(state.shortcut, 'shortcut', '#7fa6ff');
 
       const drawPoints = (
-        pts: Array<{ x: number; z: number; e?: number; ramp?: boolean; bridge?: boolean }>,
+        pts: Array<{ x: number; z: number; e?: number; ramp?: boolean; bridge?: boolean; boost?: boolean; loop?: boolean; tunnel?: boolean; tunnelWall?: boolean; tunnelWallSide?: 'bottom' | 'left' | 'right' }>,
         mode: 'main' | 'shortcut',
         baseColor: string,
       ) => {
@@ -820,8 +955,12 @@ export class LobbyUI {
           const c = toCanvas(p.x, p.z, w, h);
           const selected = mode === state.mode && i === state.selected;
           let fill = baseColor;
-          if ((p as TrackControlPoint).ramp) fill = '#ffb347';
-          else if ((p as TrackControlPoint).bridge) fill = '#9bd7ff';
+          if ((p as RouteControlPoint).ramp) fill = '#ffb347';
+          else if ((p as RouteControlPoint).bridge) fill = '#9bd7ff';
+          else if ((p as RouteControlPoint).boost) fill = '#fff275';
+          else if ((p as RouteControlPoint).loop) fill = '#8ff3ff';
+          else if ((p as RouteControlPoint).tunnel) fill = '#b58cff';
+          if ((p as RouteControlPoint).tunnelWall) fill = '#ff8d8d';
           ctx.beginPath();
           ctx.fillStyle = selected ? '#ffffff' : fill;
           ctx.arc(c.x, c.y, selected ? 5.8 : 4.1, 0, Math.PI * 2);
@@ -879,7 +1018,7 @@ export class LobbyUI {
     camera.position.set(0, 90, 220);
 
     let world = new CANNON.World({ gravity: new CANNON.Vec3(0, -20, 0) });
-    let previewTrack: Track | null = null;
+    let previewRoute: Route | null = null;
     const handles = new THREE.Group();
     scene.add(handles);
 
@@ -921,25 +1060,33 @@ export class LobbyUI {
       });
     };
 
-    let lastTrackRebuildMs = 0;
+    let lastRouteRebuildMs = 0;
     const rebuildTrack = (force = false) => {
       if (!state.dirtyTrack) return;
       const now = performance.now();
       const isDragging = state.draggingPoint || state.miniDraggingPoint;
       const minIntervalMs = isDragging ? 50 : 0; // cap heavy geometry rebuilds while dragging (~20fps)
-      if (!force && now - lastTrackRebuildMs < minIntervalMs) return;
-      lastTrackRebuildMs = now;
+      if (!force && now - lastRouteRebuildMs < minIntervalMs) return;
+      lastRouteRebuildMs = now;
 
       state.dirtyTrack = false;
-      if (previewTrack) {
-        scene.remove(previewTrack.mesh);
-        disposeObject3D(previewTrack.mesh);
+      if (previewRoute) {
+        scene.remove(previewRoute.mesh);
+        disposeObject3D(previewRoute.mesh);
       }
       // Use a fresh physics world each rebuild so bodies never accumulate.
       world = new CANNON.World({ gravity: new CANNON.Vec3(0, -20, 0) });
-      previewTrack = new Track(scene, world, {
+      previewRoute = new Route(scene, world, {
+        layoutType: state.layoutType,
+        arenaShape: state.arenaShape,
+        arenaRadiusX: state.arenaRadiusX,
+        arenaRadiusZ: state.arenaRadiusZ,
+        arenaFloorY: state.arenaFloorY,
+        arenaWallHeight: state.arenaWallHeight,
+        interiorObstacles: [],
         main: state.main,
         shortcut: state.shortcut,
+        showCenterpiece: state.showCenterpiece,
       });
       rebuildHandles();
     };
@@ -989,6 +1136,31 @@ export class LobbyUI {
       row.appendChild(document.createTextNode(label));
       return row;
     };
+    const buildSelect = (
+      label: string,
+      value: string,
+      options: Array<{ value: string; label: string }>,
+      onChange: (v: string) => void,
+    ) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:60px 1fr;gap:6px;align-items:center;margin-bottom:6px;';
+      const lbl = document.createElement('div');
+      lbl.textContent = label;
+      lbl.style.cssText = 'font-size:11px;color:#9f9f9f;';
+      const sel = document.createElement('select');
+      sel.style.cssText = 'width:100%;padding:6px;background:#111;border:1px solid #333;border-radius:4px;color:#eee;';
+      for (const opt of options) {
+        const o = document.createElement('option');
+        o.value = opt.value;
+        o.textContent = opt.label;
+        if (opt.value === value) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.onchange = () => onChange(sel.value);
+      row.appendChild(lbl);
+      row.appendChild(sel);
+      return row;
+    };
     const refreshPanel = () => {
       styleModeBtn(mainBtn, state.mode === 'main');
       styleModeBtn(shortBtn, state.mode === 'shortcut');
@@ -1021,13 +1193,32 @@ export class LobbyUI {
       const pt = arr[state.selected];
       fields.appendChild(buildNumberInput('X', pt.x, v => { pt.x = v; state.dirtyTrack = true; drawMiniMap(); }));
       fields.appendChild(buildNumberInput('Z', pt.z, v => { pt.z = v; state.dirtyTrack = true; drawMiniMap(); }));
-      fields.appendChild(buildNumberInput('Elev', (pt as TrackControlPoint).e, v => { (pt as TrackControlPoint).e = v; state.dirtyTrack = true; }));
+      fields.appendChild(buildNumberInput('Elev', (pt as RouteControlPoint).e, v => { (pt as RouteControlPoint).e = v; state.dirtyTrack = true; }));
       if (state.mode === 'main') {
-        const m = pt as TrackControlPoint;
+        const m = pt as RouteControlPoint;
         fields.appendChild(buildNumberInput('Width', m.w, v => { m.w = Math.max(6, Math.min(24, v)); state.dirtyTrack = true; }));
         fields.appendChild(buildCheck('Ramp', !!m.ramp, v => { m.ramp = v; state.dirtyTrack = true; }));
         fields.appendChild(buildCheck('Bridge', !!m.bridge, v => { m.bridge = v; state.dirtyTrack = true; }));
         fields.appendChild(buildCheck('No Rails', !!m.noRails, v => { m.noRails = v; state.dirtyTrack = true; }));
+        fields.appendChild(buildCheck('Boost Pad', !!m.boost, v => { m.boost = v; state.dirtyTrack = true; }));
+        fields.appendChild(buildCheck('Loop Segment', !!m.loop, v => { m.loop = v; state.dirtyTrack = true; }));
+        fields.appendChild(buildCheck('Tunnel', !!m.tunnel, v => { m.tunnel = v; state.dirtyTrack = true; }));
+        fields.appendChild(buildCheck('Tunnel Half-Wall', !!m.tunnelWall, v => { m.tunnelWall = v; state.dirtyTrack = true; }));
+        if (m.tunnelWall) {
+          fields.appendChild(buildSelect(
+            'Wall Side',
+            m.tunnelWallSide ?? 'bottom',
+            [
+              { value: 'bottom', label: 'BOTTOM' },
+              { value: 'left', label: 'LEFT' },
+              { value: 'right', label: 'RIGHT' },
+            ],
+            v => {
+              m.tunnelWallSide = v === 'left' || v === 'right' ? v : 'bottom';
+              state.dirtyTrack = true;
+            },
+          ));
+        }
       }
     };
 
@@ -1057,7 +1248,7 @@ export class LobbyUI {
         selectedHandle = hit;
         state.draggingPoint = true;
         const arr = getCurrent();
-        const elev = (arr[state.selected] as TrackControlPoint).e;
+        const elev = (arr[state.selected] as RouteControlPoint).e;
         dragPlane.set(new THREE.Vector3(0, 1, 0), -elev);
         refreshPanel();
         return;
@@ -1112,10 +1303,10 @@ export class LobbyUI {
       const pt = arr[state.selected];
       const sign = ev.deltaY > 0 ? -1 : 1;
       if (state.mode === 'main' && ev.shiftKey) {
-        const m = pt as TrackControlPoint;
+        const m = pt as RouteControlPoint;
         m.w = Math.max(6, Math.min(24, m.w + sign * 0.25));
       } else {
-        (pt as TrackControlPoint).e += sign * 0.25;
+        (pt as RouteControlPoint).e += sign * 0.25;
       }
       state.dirtyTrack = true;
       refreshPanel();
@@ -1175,7 +1366,7 @@ export class LobbyUI {
       const worldPos = toWorldFromMini(p.x, p.y);
       const selectedArr = getCurrent();
       const targetElev = state.selected >= 0
-        ? (selectedArr[state.selected] as TrackControlPoint).e
+        ? (selectedArr[state.selected] as RouteControlPoint).e
         : 7;
       const inserted = state.mode === 'main'
         ? insertPointAtConnection({ x: worldPos.x, z: worldPos.z, w: 12, e: targetElev })
@@ -1302,9 +1493,9 @@ export class LobbyUI {
       mini2d.removeEventListener('mouseup', onMiniMouseUp);
       mini2d.removeEventListener('mouseleave', onMiniMouseUp);
       mini2d.removeEventListener('contextmenu', onMiniContext);
-      if (previewTrack) {
-        scene.remove(previewTrack.mesh);
-        disposeObject3D(previewTrack.mesh);
+      if (previewRoute) {
+        scene.remove(previewRoute.mesh);
+        disposeObject3D(previewRoute.mesh);
       }
       renderer.dispose();
       modal.remove();

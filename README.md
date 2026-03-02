@@ -1,6 +1,6 @@
-# BlockKart
+# CHAINDUEL3D
 
-A browser-based 3D kart racing game with Anatomy of Bitcoin visual aesthetics and Lightning Network sat wagering.
+A browser-based 3D chain duel game with Anatomy of Bitcoin visual aesthetics and Lightning Network sat wagering.
 
 ## Quick Start
 
@@ -20,14 +20,14 @@ Click **Practice Mode** on the lobby screen to race without sats. No backend or 
 ### With Lightning Payments
 
 1. Copy `server/.env.example` to `server/.env`
-2. Set `TRACK_ADMIN_SECRET` (required for admin track APIs)
+2. Set `ROUTE_ADMIN_SECRET` (required for admin route APIs)
 3. Fill in your LNBits credentials
-4. Start the game and click **Start Race** — QR codes will be generated for both players to deposit sats
+4. Start the game and click **Start Chain Duel** — QR codes will be generated for both players to deposit sats
 
-### Admin Track APIs
+### Admin Route APIs
 
-- Admin endpoints under `/api/admin/tracks/*` require header `x-admin-secret`.
-- The header value must match `TRACK_ADMIN_SECRET` from `server/.env`.
+- Admin endpoints under `/api/admin/routes/*` require header `x-admin-secret`.
+- The header value must match `ROUTE_ADMIN_SECRET` from `server/.env`.
 
 ## Controls
 
@@ -43,7 +43,7 @@ Click **Practice Mode** on the lobby screen to race without sats. No backend or 
 ## Items
 
 - **Double Spend** — Speed boost
-- **Fork Bomb** — Drops obstacle on track
+- **Fork Bomb** — Drops obstacle on route
 - **Lightning Bolt** — Slows opponent
 
 ## Tech Stack
@@ -56,7 +56,7 @@ Click **Practice Mode** on the lobby screen to race without sats. No backend or 
 ## Project Structure
 
 ```
-blockkart/
+chainduel3d/
   client/          # Browser game (Three.js)
   server/          # Backend (Express + LNBits)
   shared/          # Shared TypeScript types

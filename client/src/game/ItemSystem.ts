@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Kart } from './Kart';
+import { ChainRider } from './ChainRider';
 import { ItemId, ITEMS, OnlineItemBoxState, OnlineObstacleState } from 'shared/types';
 
 interface ItemBox {
@@ -98,7 +98,7 @@ export class ItemSystem {
     }
   }
 
-  update(dt: number, karts: Kart[], positions: number[]) {
+  update(dt: number, karts: ChainRider[], positions: number[]) {
     this.updateVisuals(dt);
     if (this.localAuthorityEnabled) {
       this.updateAuthoritativeLocalState(dt, karts, positions);
@@ -148,7 +148,7 @@ export class ItemSystem {
     }
   }
 
-  private updateAuthoritativeLocalState(dt: number, karts: Kart[], positions: number[]) {
+  private updateAuthoritativeLocalState(dt: number, karts: ChainRider[], positions: number[]) {
     for (const box of this.itemBoxes) {
       if (box.active) {
         box.previewTimer -= dt;
@@ -191,7 +191,7 @@ export class ItemSystem {
     }
   }
 
-  private collectItem(playerIndex: number, box: ItemBox, karts: Kart[], positions: number[]) {
+  private collectItem(playerIndex: number, box: ItemBox, karts: ChainRider[], positions: number[]) {
     void karts;
     void positions;
     this.playerItems[playerIndex] = box.previewItem;
@@ -238,7 +238,7 @@ export class ItemSystem {
     return '?';
   }
 
-  useItem(playerIndex: number, karts: Kart[]): boolean {
+  useItem(playerIndex: number, karts: ChainRider[]): boolean {
     if (!this.localAuthorityEnabled) return false;
     const item = this.playerItems[playerIndex];
     if (!item) return false;
@@ -270,7 +270,7 @@ export class ItemSystem {
         break;
       }
       case 'sats_siphon': {
-        let nearest: Kart | null = null;
+        let nearest: ChainRider | null = null;
         let bestDist = Infinity;
         const userPos = user.getPosition();
         for (const opp of opponents) {
@@ -316,7 +316,7 @@ export class ItemSystem {
     item: ItemId,
     playerIndex: number,
     targetPlayerIndex: number | undefined,
-    karts: Kart[],
+    karts: ChainRider[],
   ) {
     const user = karts[playerIndex];
     if (!user) return;
@@ -343,7 +343,7 @@ export class ItemSystem {
     }
   }
 
-  private spawnBoostEffect(kart: Kart) {
+  private spawnBoostEffect(kart: ChainRider) {
     const flames = new THREE.Group();
     const coneMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -375,7 +375,7 @@ export class ItemSystem {
     setTimeout(() => kart.mesh.remove(flames), 800);
   }
 
-  private spawnForkBomb(kart: Kart) {
+  private spawnForkBomb(kart: ChainRider) {
     const pos = kart.getPosition().clone();
     const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(kart.getQuaternion());
     pos.add(dir.multiplyScalar(-3));
@@ -396,7 +396,7 @@ export class ItemSystem {
     this.obstacles.push({ mesh, body: pos.clone(), lifetime: 15 });
   }
 
-  private spawnLightningEffect(kart: Kart) {
+  private spawnLightningEffect(kart: ChainRider) {
     const kartPos = kart.getPosition();
 
     // Lightning bolt geometry (jagged line from sky to kart)

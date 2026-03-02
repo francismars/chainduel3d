@@ -1,3 +1,4 @@
+import type { GameMode } from 'shared/types';
 import QRCode from 'qrcode';
 
 export class ResultUI {
@@ -7,7 +8,14 @@ export class ResultUI {
     this.container = container;
   }
 
-  async show(winnerName: string, top3Names: string[], amount: number, lnurl: string | null, onContinue: () => void) {
+  async show(
+    winnerName: string,
+    top3Names: string[],
+    amount: number,
+    lnurl: string | null,
+    onContinue: () => void,
+    mode: GameMode = 'classic',
+  ) {
     this.container.innerHTML = '';
 
     const wrapper = document.createElement('div');
@@ -28,7 +36,9 @@ export class ResultUI {
     wrapper.appendChild(trophy);
 
     const winText = document.createElement('h1');
-    winText.textContent = `${winnerName.toUpperCase()} WINS!`;
+    winText.textContent = mode === 'derby'
+      ? `${winnerName.toUpperCase()} SURVIVES!`
+      : `${winnerName.toUpperCase()} WINS!`;
     winText.style.cssText = `
       font-size: 48px; margin: 0 0 16px 0; color: #fff;
       text-shadow: 0 0 30px rgba(247,147,26,0.5);
@@ -52,7 +62,7 @@ export class ResultUI {
       const p2 = top3Names[1] ?? '---';
       const p3 = top3Names[2] ?? '---';
       podium.innerHTML = `
-        <div style="color:#fff;letter-spacing:1px;margin-bottom:4px">TOP 3</div>
+        <div style="color:#fff;letter-spacing:1px;margin-bottom:4px">${mode === 'derby' ? 'SURVIVOR ORDER' : 'TOP 3'}</div>
         <div>1. ${p1}</div>
         <div>2. ${p2}</div>
         <div>3. ${p3}</div>
@@ -91,7 +101,7 @@ export class ResultUI {
 
     // Continue button
     const continueBtn = document.createElement('button');
-    continueBtn.textContent = 'CHAIN RACE AGAIN';
+    continueBtn.textContent = mode === 'derby' ? 'DERBY AGAIN' : 'DUEL AGAIN';
     continueBtn.style.cssText = `
       margin-top: 30px; padding: 14px 40px;
       background: linear-gradient(135deg, #f7931a, #e67e00);

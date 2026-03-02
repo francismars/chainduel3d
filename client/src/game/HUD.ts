@@ -1,4 +1,4 @@
-import { GAME_CONFIG } from 'shared/types';
+import { GAME_CONFIG, GameMode } from 'shared/types';
 
 const POS_LABELS = ['1st', '2nd', '3rd', '4th'];
 const POS_COLORS = ['#ffd54f', '#cfd8dc', '#ffab91', '#90caf9'];
@@ -16,6 +16,7 @@ export class HUD {
   private lastHudUpdateMs = 0;
   private lastMinimapUpdateMs = 0;
   private totalLaps: number;
+  private gameMode: GameMode;
 
   constructor(
     container: HTMLElement,
@@ -23,10 +24,12 @@ export class HUD {
     visiblePlayerIndices?: number[],
     minimapPath?: Array<{ x: number; y: number }>,
     totalLaps: number = GAME_CONFIG.TOTAL_LAPS,
+    gameMode: GameMode = 'classic',
   ) {
     this.container = container;
     this.playerNames = playerNames;
     this.totalLaps = Math.max(1, totalLaps);
+    this.gameMode = gameMode;
     this.minimapPath = minimapPath ?? [];
     this.computeMinimapBounds();
 
@@ -107,7 +110,8 @@ export class HUD {
       const blocks = chainBlocks?.[i] ?? 0;
       const isOut = eliminated?.[i] ?? false;
       const speedFill = Math.min(100, (speedNum / 120) * 100);
-      const chainFill = Math.min(100, (blocks / 12) * 100);
+      const maxBlocks = this.gameMode === 'derby' ? 10 : 12;
+      const chainFill = Math.min(100, (blocks / maxBlocks) * 100);
       const positionColor = POS_COLORS[Math.max(0, Math.min(3, positions[i] ?? 3))];
       const lastLap = this.formatTime(raceTimeSec ?? 0);
       const bestLap = this.formatTime(bestLapTimes?.[i] ?? Infinity);
@@ -116,6 +120,8 @@ export class HUD {
       const rivalItems = this.renderRivalItems(i, items, positions);
       const cpPassed = checkpointPassed?.[i] ?? 0;
       const cpTotal = checkpointTotal ?? 0;
+      const survivors = (eliminated ?? []).filter(v => !v).length;
+      const derbyTopText = `SURVIVORS ${survivors} · TIME ${lastLap}`;
       const nextArrow = this.getCheckpointArrow(
         i,
         worldPositions,
@@ -153,7 +159,7 @@ export class HUD {
         <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
           <div>
             <div style="font-size:13px;font-weight:bold;color:#fff;letter-spacing:1px">${this.playerNames[i]}</div>
-            <div style="font-size:10px;color:#8c8c8c">LAP ${lap}/${this.totalLaps} · BEST ${bestLap}</div>
+            <div style="font-size:10px;color:#8c8c8c">${this.gameMode === 'derby' ? derbyTopText : `LAP ${lap}/${this.totalLaps} · BEST ${bestLap}`}</div>
           </div>
           <div style="font-size:28px;font-weight:900;line-height:0.9;color:${positionColor};text-shadow:0 0 14px ${positionColor}">${pos}</div>
         </div>
@@ -176,7 +182,7 @@ export class HUD {
           </div>
           <div style="font-size:10px;color:#9a9a9a;line-height:1.3">
             <div>RACE ${lastLap}</div>
-            <div>CP ${cpPassed}/${cpTotal} <span style="display:inline-block;transform:rotate(${nextArrow.toFixed(2)}rad);margin-left:4px;color:#fff">▲</span></div>
+            <div>${this.gameMode === 'derby' ? `ALIVE ${survivors}` : `CP ${cpPassed}/${cpTotal}`} <span style="display:inline-block;transform:rotate(${nextArrow.toFixed(2)}rad);margin-left:4px;color:#fff">▲</span></div>
             <div>DRIFT <span style="color:#fff;text-shadow:0 0 8px ${driftGlow}">${driftStatus}</span></div>
           </div>
         </div>
@@ -192,7 +198,7 @@ export class HUD {
 
         <div>
           <div style="display:flex;justify-content:space-between;color:#8f8f8f;font-size:10px;margin-bottom:2px">
-            <span>CHAIN</span>
+            <span>${this.gameMode === 'derby' ? 'HEALTH' : 'CHAIN'}</span>
             <span style="color:${isOut ? '#b0b0b0' : '#fff'}">
               ${isOut ? 'ELIMINATED' : `${blocks} BLOCKS ${blockDeltaText}`}
             </span>
@@ -202,7 +208,7 @@ export class HUD {
             ${pulseOn ? `<div style="position:absolute;inset:0;background:rgba(255,255,255,0.18)"></div>` : ''}
           </div>
         </div>
-        <div style="margin-top:6px;display:flex;gap:2px">${this.renderChainPips(blocks)}</div>
+        <div style="margin-top:6px;display:flex;gap:2px">${this.renderChainPips(blocks, maxBlocks)}</div>
         <div style="margin-top:6px;font-size:10px;color:#9a9a9a;border-top:1px solid #242424;padding-top:4px">
           <span style="color:#d0d0d0">RIVAL ITEMS:</span> ${rivalItems}
         </div>
@@ -256,8 +262,7 @@ export class HUD {
       .join('  |  ');
   }
 
-  private renderChainPips(blocks: number): string {
-    const max = 12;
+  private renderChainPips(blocks: number, max: number): string {
     let html = '';
     for (let i = 0; i < max; i++) {
       const on = i < blocks;
