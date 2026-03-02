@@ -2,19 +2,19 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { SplitScreen } from './SplitScreen';
 import { FollowCamera } from './Camera';
-import { ChainClass, Kart } from './Kart';
-import { Track } from './Track';
+import { ChainClass, ChainRider } from './ChainRider';
+import { Route } from './Route';
 import { InputManager } from './InputManager';
 import { ItemSystem } from './ItemSystem';
 import { HUD } from './HUD';
 import { Countdown } from './Countdown';
-import { ItemId, OnlineRaceEvent, OnlineRaceInput, OnlineRaceSnapshot, RoomMember, TrackCustomLayout } from 'shared/types';
+import { GameMode, ItemId, OnlineRaceEvent, OnlineRaceInput, OnlineRaceSnapshot, RoomMember, RouteCustomLayout } from 'shared/types';
 import {
   createDefaultRuntimeState,
   createSimRandomState,
   nextSimRandom,
-  buildSimMainTrackPoints,
-  buildSimTrackPoints,
+  buildSimMainRoutePoints,
+  buildSimRoutePoints,
   buildSimCheckpoints,
   buildSimItemBoxes,
   collectNearbyItem,
@@ -43,11 +43,11 @@ import {
   type SimPlayerRuntimeState,
   type SimPlayerState,
   type SimRaceState,
-  type SimTrackPoint,
+  type SimRoutePoint,
 } from 'shared/sim';
 
 const NUM_PLAYERS = 4;
-const KART_COLORS = [0xffffff, 0x888888, 0x44aaff, 0xff4444];
+const CHAIN_COLORS = [0xffffff, 0x888888, 0x44aaff, 0xff4444];
 const START_CHAIN_BLOCKS = 5;
 const STEAL_COOLDOWN_MS = 1100;
 const MEMPOOL_API_BASE = 'https://mempool.space/api';
@@ -62,7 +62,7 @@ interface OnlineRuntime {
   localSlot: number;
   sendInput: (input: OnlineRaceInput) => void;
   getOnlineStartAt: () => number | null;
-  trackLayout: TrackCustomLayout | null;
+  routeLayout: RouteCustomLayout | null;
 }
 
 export class Game {
@@ -70,8 +70,8 @@ export class Game {
   private splitScreen: SplitScreen;
   private scene: THREE.Scene;
   private world: CANNON.World;
-  private track: Track;
-  private karts: Kart[];
+  private route: Route;
+  private karts: ChainRider[];
   private cameras: FollowCamera[];
   private inputManager: InputManager;
   private itemSystem: ItemSystem;
@@ -120,8 +120,8 @@ export class Game {
   private onlineStartAtMs: number | null = null;
   private raceAnnouncementEl: HTMLDivElement | null = null;
   private disposed = false;
-  private localSimTrackMain: SimTrackPoint[] = [];
-  private localSimTrackAll: SimTrackPoint[] = [];
+  private localSimRouteMain: SimRoutePoint[] = [];
+  private localSimRouteAll: SimRoutePoint[] = [];
   private localSimCheckpoints: SimCheckpoint[] = [];
   private localSimRuntime: SimPlayerRuntimeState[] = Array.from({ length: NUM_PLAYERS }, () => createDefaultRuntimeState());
   private localSimItemBoxes: SimItemBoxState[] = [];
@@ -129,7 +129,10 @@ export class Game {
   private localSimTick = 0;
   private localSimTimeMs = 0;
   private localSimRngState: SimRandomState = createSimRandomState(1);
-  private raceTrackLayout: TrackCustomLayout | null = null;
+  private raceRouteLayout: RouteCustomLayout | null = null;
+  private sponsorLogoUrls: string[];
+  private gameMode: GameMode;
+  private isArenaLayout = false;
 
   constructor(
     container: HTMLElement,
@@ -138,7 +141,9 @@ export class Game {
     chainClasses: ChainClass[],
     totalLaps: number,
     online: OnlineRuntime | undefined,
-    localTrackLayout: TrackCustomLayout | null | undefined,
+    localRouteLayout: RouteCustomLayout | null | undefined,
+    sponsorLogoUrls: string[] | undefined,
+    gameMode: GameMode,
     onFinished: (top3Ids: number[]) => void,
   ) {
     this.container = container;
@@ -171,6 +176,8 @@ export class Game {
       prevSacrificePressed: false,
     }));
     this.finishPovTarget = Array.from({ length: NUM_PLAYERS }, (_, i) => i);
+    this.sponsorLogoUrls = sponsorLogoUrls ?? [];
+    this.gameMode = gameMode;
     this.onFinished = onFinished;
 
     this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, -20, 0) });
@@ -190,22 +197,27 @@ export class Game {
     this.splitScreen = new SplitScreen(container);
     this.splitScreen.setActivePlayers(this.humanPlayerIndices);
 
-    const resolvedTrackLayout = this.online?.enabled ? (this.online.trackLayout ?? null) : (localTrackLayout ?? null);
-    this.raceTrackLayout = resolvedTrackLayout;
-    this.track = new Track(this.scene, this.world, resolvedTrackLayout, { useStoredCustomLayout: false });
-    this.initLocalSimTrackData();
+    const resolvedRouteLayout = this.online?.enabled ? (this.online.routeLayout ?? null) : (localRouteLayout ?? null);
+    this.raceRouteLayout = resolvedRouteLayout;
+    this.isArenaLayout = resolvedRouteLayout?.layoutType === 'arena';
+    this.route = new Route(this.scene, this.world, resolvedRouteLayout, {
+      useStoredCustomLayout: false,
+      sponsorLogoUrls: this.sponsorLogoUrls,
+    });
+    this.initLocalSimRouteData();
     this.localSimItemBoxes = buildSimItemBoxes(
-      this.localSimTrackMain,
+      this.localSimRouteMain,
       10,
       () => rollPreviewItem(() => nextSimRandom(this.localSimRngState)),
+      this.raceRouteLayout as any,
     );
 
     this.karts = [];
     for (let i = 0; i < NUM_PLAYERS; i++) {
-      const kart = new Kart(this.world, {
-        color: KART_COLORS[i],
-        startPosition: this.track.startPositions[i],
-        startRotation: this.track.startRotation,
+      const kart = new ChainRider(this.world, {
+        color: CHAIN_COLORS[i],
+        startPosition: this.route.startPositions[i],
+        startRotation: this.route.startRotation,
         chainClass: this.chainClasses[i] ?? 'balanced',
       });
       this.karts.push(kart);
@@ -224,12 +236,12 @@ export class Game {
     }
 
     this.inputManager = new InputManager();
-    this.itemSystem = new ItemSystem(this.scene, this.track.itemBoxPositions);
+    this.itemSystem = new ItemSystem(this.scene, this.route.itemBoxPositions);
     this.itemSystem.setLocalAuthorityEnabled(!this.online?.enabled);
-    const minimapPath = this.track.trackPoints
+    const minimapPath = this.route.routePoints
       .filter((_, idx) => idx % 4 === 0)
       .map(tp => new THREE.Vector2(tp.position.x, tp.position.z));
-    this.hud = new HUD(container, playerNames, this.humanPlayerIndices, minimapPath, this.totalLaps);
+    this.hud = new HUD(container, playerNames, this.humanPlayerIndices, minimapPath, this.totalLaps, this.gameMode);
     this.countdown = new Countdown(this.hud);
     if (this.online?.enabled && SHOW_ONLINE_ROOM_INTEL) {
       this.onlineRosterEl = document.createElement('div');
@@ -336,14 +348,22 @@ export class Game {
     return humans.length > 0 ? humans : [0];
   }
 
-  private initLocalSimTrackData() {
-    const layout = this.raceTrackLayout as {
-      main: Array<{ x: number; z: number; w: number; e: number; ramp?: boolean }>;
+  private initLocalSimRouteData() {
+    const layout = this.raceRouteLayout as {
+      main: Array<{ x: number; z: number; w: number; e: number; ramp?: boolean; boost?: boolean }>;
       shortcut?: Array<{ x: number; z: number; e: number }>;
+      layoutType?: 'loop' | 'arena';
+      arenaShape?: 'circle' | 'rounded_rect';
+      arenaRadiusX?: number;
+      arenaRadiusZ?: number;
+      arenaFloorY?: number;
+      arenaWallHeight?: number;
+      arenaObstacleDensity?: number;
+      interiorObstacles?: Array<{ x: number; z: number; radius: number; height?: number }>;
     } | null;
-    this.localSimTrackMain = buildSimMainTrackPoints(layout);
-    this.localSimTrackAll = buildSimTrackPoints(layout, this.localSimTrackMain);
-    this.localSimCheckpoints = buildSimCheckpoints(this.localSimTrackMain);
+    this.localSimRouteMain = buildSimMainRoutePoints(layout);
+    this.localSimRouteAll = buildSimRoutePoints(layout, this.localSimRouteMain);
+    this.localSimCheckpoints = buildSimCheckpoints(this.localSimRouteMain, 14, layout as any);
   }
 
   start() {
@@ -353,9 +373,10 @@ export class Game {
     this.localSimTimeMs = 0;
     this.localSimObstacles = [];
     this.localSimItemBoxes = buildSimItemBoxes(
-      this.localSimTrackMain,
+      this.localSimRouteMain,
       10,
       () => rollPreviewItem(() => nextSimRandom(this.localSimRngState)),
+      this.raceRouteLayout as any,
     );
     this.btcPollTimerMs = 250;
     if (!this.online?.enabled) {
@@ -390,7 +411,12 @@ export class Game {
       }
     }
 
-    this.world.fixedStep(1 / 60, dt);
+    // Local races are driven by shared stepRace() state each frame.
+    // Running full Cannon stepping at the same time can effectively
+    // double-advance motion, which feels like sped-up gameplay.
+    if (this.online?.enabled || !this.raceActive) {
+      this.world.fixedStep(1 / 60, dt);
+    }
 
     if (this.online?.enabled) {
       this.updateSnapshotFollowerRace(dt, { sendLocalInput: true, renderDelayMs: 100, eventSource: 'online' });
@@ -398,21 +424,19 @@ export class Game {
     } else if (this.raceActive) {
       this.raceTime += dt;
       this.updateRace(dt);
-      if (this.localAuthoritySnapshot) {
-        this.setOnlineSnapshot(this.localAuthoritySnapshot);
-        this.updateSnapshotFollowerRace(dt, { sendLocalInput: false, renderDelayMs: 0, eventSource: 'local' });
-      }
     }
 
     if (!this.raceActive) {
       for (const kart of this.karts) {
-        this.track.constrainToTrack(kart.body, false);
+        this.route.constrainToRoute(kart.body, false);
         kart.stabilizeIdleChain(dt);
       }
     }
 
+    this.updateTunnelPresentation(dt);
+
     for (const kart of this.karts) {
-      kart.syncMeshToPhysics();
+      kart.syncMeshToPhysics((worldPos: THREE.Vector3) => this.route.sampleTrackSurfaceY(worldPos));
       kart.updateEffects(dt);
     }
 
@@ -429,6 +453,7 @@ export class Game {
           k.speed, k.maxSpeedPublic,
           k.drifting, k.driftDirection,
           k.speedBoostActive,
+          k.getTunnelRoll() * 0.82,
         );
         continue;
       }
@@ -439,6 +464,7 @@ export class Game {
           k.speed, k.maxSpeedPublic,
           k.drifting, k.driftDirection,
           k.speedBoostActive,
+          k.getTunnelRoll() * 0.82,
         );
         continue;
       }
@@ -455,6 +481,7 @@ export class Game {
           k.speed, k.maxSpeedPublic,
           k.drifting, k.driftDirection,
           k.speedBoostActive,
+          k.getTunnelRoll() * 0.82,
         );
         continue;
       }
@@ -477,6 +504,7 @@ export class Game {
           tk.speed, tk.maxSpeedPublic,
           tk.drifting, tk.driftDirection,
           tk.speedBoostActive,
+          tk.getTunnelRoll() * 0.82,
         );
         continue;
       }
@@ -484,7 +512,7 @@ export class Game {
       this.updateEliminatedSpectatorCamera(i, dt);
     }
 
-    this.track.updateParticles(dt);
+    this.route.updateParticles(dt);
     this.updateBitcoinData(dt, now);
     const positions = (this.online?.enabled && this.onlineStandings && this.onlineStandings.length > 0)
       ? this.onlineStandings
@@ -505,11 +533,12 @@ export class Game {
     const eliminated = this.karts.map(k => k.isEliminated());
     const worldPositions = this.karts.map(k => k.getPosition());
     const headings = this.karts.map(k => k.heading);
-    const checkpointTotal = this.track.checkpoints.length;
+    const checkpointTotal = this.gameMode === 'derby' && this.isArenaLayout ? 0 : this.route.checkpoints.length;
     const checkpointPassed = this.karts.map(k => k.lastCheckpoint < 0 ? 0 : k.lastCheckpoint + 1);
     const nextCheckpointPositions = this.karts.map(k => {
+      if (checkpointTotal <= 0) return { x: k.getPosition().x, z: k.getPosition().z };
       const nextIdx = (k.lastCheckpoint + 1 + checkpointTotal) % checkpointTotal;
-      const cp = this.track.checkpoints[nextIdx];
+      const cp = this.route.checkpoints[nextIdx];
       return { x: cp.position.x, z: cp.position.z };
     });
 
@@ -546,7 +575,7 @@ export class Game {
       })
       .join('<br/>');
     this.onlineRosterEl.innerHTML = `
-      <div style="color:#fff;margin-bottom:4px">ONLINE ROOM INTEL</div>
+      <div style="color:#fff;margin-bottom:4px">ONLINE LOBBY INTEL</div>
       <div>${rows || 'No room data'}</div>
     `;
   }
@@ -571,7 +600,11 @@ export class Game {
       fog.color.copy(c);
     }
 
-    this.track.setMempoolCongestion(this.congestionLevelSmoothed);
+    this.route.setMempoolCongestion(this.congestionLevelSmoothed);
+    const ambientBoost = this.finalLapIntensityActive ? 0.22 : 0;
+    this.route.setAmbientIntensity(
+      THREE.MathUtils.clamp(0.25 + this.congestionLevelSmoothed * 0.75 + ambientBoost, 0, 1),
+    );
   }
 
   private async fetchBitcoinData() {
@@ -602,24 +635,31 @@ export class Game {
       const bands = (mempoolBlocks ?? [])
         .map(b => b.medianFee ?? b.feeRange?.[Math.floor((b.feeRange?.length ?? 1) / 2)] ?? 0)
         .filter(v => Number.isFinite(v) && v > 0);
-      if (bands.length > 0) this.track.setFeeHeatmap(bands as number[]);
-      this.track.setMempoolLayeredSlabs(
+      if (bands.length > 0) this.route.setFeeHeatmap(bands as number[]);
+      this.route.setMempoolLayeredSlabs(
         (mempoolBlocks ?? []).map(b => ({
           medianFee: b.medianFee,
           blockVSize: b.blockVSize,
           nTx: b.nTx,
         })),
       );
+      const ringSeries = (mempoolBlocks ?? []).map(b => {
+        const fee = Number(b.medianFee ?? b.feeRange?.[Math.floor((b.feeRange?.length ?? 1) / 2)] ?? 0);
+        const fill = Number(b.blockVSize ?? 0);
+        // Data-driven horizon signal: fee pressure + block fill pressure.
+        return Math.max(0, fee * 0.7 + (fill / 1_000_000) * 45);
+      }).filter(v => Number.isFinite(v) && v > 0);
+      if (ringSeries.length > 0) this.route.setEdgeEpochData(ringSeries);
 
       if (recommended && Number.isFinite(recommended.fastestFee)) {
-        this.track.setRecommendedFees({
+        this.route.setRecommendedFees({
           fastestFee: Math.max(1, Math.round(recommended.fastestFee ?? 1)),
           halfHourFee: Math.max(1, Math.round(recommended.halfHourFee ?? recommended.fastestFee ?? 1)),
           hourFee: Math.max(1, Math.round(recommended.hourFee ?? recommended.halfHourFee ?? recommended.fastestFee ?? 1)),
           minimumFee: Math.max(1, Math.round(recommended.minimumFee ?? 1)),
         });
       }
-      this.track.setRecentBlocks(blocks ?? []);
+      this.route.setRecentBlocks(blocks ?? []);
     } catch {
       // Keep previous visuals if the public API is unavailable temporarily.
     } finally {
@@ -698,10 +738,17 @@ export class Game {
             speed: this.karts[i].speed,
             chainLength: this.karts[i].getChainLength(),
           },
-          this.localSimTrackMain,
+          this.localSimRouteMain,
           aiRuntime,
           dt,
+          this.gameMode,
+          this.karts.map(k => {
+            const p = k.getPosition();
+            return { x: p.x, y: p.y, z: p.z, finished: k.finished, chainLength: k.getChainLength() };
+          }),
+          i,
           rng,
+          this.isArenaLayout,
         );
         input = {
           forward: !!aiInput.forward,
@@ -737,7 +784,7 @@ export class Game {
         // Keep finished racers moving but don't spend items.
       } else if (this.isAI[i]) {
         const held = this.itemSystem.playerItems[i];
-        if (held && rt.aiItemCooldownMs <= 0 && shouldAiUseItem(i, localItemPlayers as any, held as ItemId, rng)) {
+        if (held && rt.aiItemCooldownMs <= 0 && shouldAiUseItem(i, localItemPlayers as any, held as ItemId, this.gameMode, rng)) {
           this.useSharedLocalItem(i, frameEvents);
           rt.aiItemCooldownMs = 900 + rng() * 700;
         }
@@ -781,13 +828,15 @@ export class Game {
       tick: this.localSimTick,
       timeMs: this.localSimTimeMs,
       totalLaps: this.totalLaps,
-      trackMain: this.localSimTrackMain,
-      trackAll: this.localSimTrackAll.length > 0 ? this.localSimTrackAll : this.localSimTrackMain,
+      layoutType: this.raceRouteLayout?.layoutType === 'arena' ? 'arena' : 'loop',
+      interiorObstacles: this.raceRouteLayout?.interiorObstacles ?? [],
+      routeMain: this.localSimRouteMain,
+      routeAll: this.localSimRouteAll.length > 0 ? this.localSimRouteAll : this.localSimRouteMain,
       checkpoints: this.localSimCheckpoints,
       players: simPlayers,
       runtime: this.localSimRuntime,
     };
-    const step = stepRace(simState, inputs, dt, raceAssist);
+    const step = stepRace(simState, inputs, dt, raceAssist, this.gameMode);
     this.localSimTick = step.state.tick;
     this.localSimTimeMs = step.state.timeMs;
 
@@ -806,6 +855,7 @@ export class Game {
         p.driftDirection,
         p.driftCharge,
         p.eliminated,
+        true,
       );
       kart.lap = p.lap;
       kart.lastCheckpoint = p.lastCheckpoint;
@@ -819,7 +869,7 @@ export class Game {
       this.chainLengths[i] = kart.getChainLength();
       this.eliminated[i] = kart.isEliminated();
       if (kart.body.position.y < -15) {
-        kart.reset(this.track.startPositions[i], this.track.startRotation);
+        kart.reset(this.route.startPositions[i], this.route.startRotation);
         this.localSimRuntime[i] = createDefaultRuntimeState();
         this.localRaceActionPressState[i].prevUseItemPressed = false;
         this.localRaceActionPressState[i].prevSacrificePressed = false;
@@ -866,6 +916,7 @@ export class Game {
     // Match server ordering: resolve steal collisions after shared stepRace.
     this.handleStealCollisions(dt, frameEvents);
     this.checkRaceEnd();
+    this.consumeRaceEvents([...step.events, ...frameEvents], 'local');
     const placementOrder = computePlacements(
       step.state.players.map(p => ({
         finished: p.finished,
@@ -876,6 +927,7 @@ export class Game {
         chainLength: p.chainLength,
       })),
       this.localSimCheckpoints.length,
+      this.gameMode,
     );
     const rankByPlayer = new Array(NUM_PLAYERS).fill(3);
     for (let place = 0; place < placementOrder.length && place < NUM_PLAYERS; place++) {
@@ -997,7 +1049,8 @@ export class Game {
     const sourcePos = this.karts[event.playerIndex]?.getPosition();
     switch (event.type) {
       case 'checkpoint': {
-        const cpTotal = this.track.checkpoints.length;
+        if (this.gameMode === 'derby' && this.isArenaLayout) return;
+        const cpTotal = this.route.checkpoints.length;
         if (cpTotal <= 0) return;
         const passed = Math.max(0, this.karts[event.playerIndex]?.lastCheckpoint ?? -1) + 1;
         const showForSlot = source === 'online'
@@ -1009,6 +1062,7 @@ export class Game {
         return;
       }
       case 'lap': {
+        if (this.gameMode === 'derby' && this.isArenaLayout) return;
         const lap = (this.karts[event.playerIndex]?.lap ?? 0) + 1;
         this.showGlobalFeedback(`P${event.playerIndex + 1} LAP ${Math.min(this.totalLaps, lap)}/${this.totalLaps}`, sourcePos);
         return;
@@ -1121,7 +1175,7 @@ export class Game {
       this.localSimObstacles,
       this.finalLapIntensityActive,
       events,
-      12,
+      this.getModeMaxBlocks(),
     );
     if (!used) return;
     for (let i = 0; i < NUM_PLAYERS; i++) {
@@ -1198,6 +1252,10 @@ export class Game {
     return true;
   }
 
+  private getModeMaxBlocks(): number {
+    return this.gameMode === 'derby' ? 10 : 12;
+  }
+
   private handleStealCollisions(dt: number, events?: OnlineRaceEvent[]) {
     if (this.online?.enabled) return;
     const players = this.karts.map((k): SimPlayerState => {
@@ -1230,7 +1288,7 @@ export class Game {
       this.stealCooldownMs,
       dt,
       simEvents,
-      { maxBlocks: 12, cooldownMs: STEAL_COOLDOWN_MS, segmentSpacing: 0.88, headToBodyHitDistance: 1.0 },
+      { maxBlocks: this.getModeMaxBlocks(), cooldownMs: STEAL_COOLDOWN_MS, segmentSpacing: 0.88, headToBodyHitDistance: 1.0 },
     );
     for (let i = 0; i < NUM_PLAYERS; i++) {
       const kart = this.karts[i];
@@ -1272,6 +1330,34 @@ export class Game {
       this.itemSystem.setFinalLapIntensity(shouldBeActive);
       if (shouldBeActive) {
         this.showGlobalFeedback('FINAL LAP INTENSITY');
+      }
+    }
+  }
+
+  private updateTunnelPresentation(dt: number) {
+    for (const kart of this.karts) {
+      const info = this.route.getRouteInfo(kart.getPosition());
+      const tunnelInfluence = Math.min(1, Math.max(0, info.tunnelBlend));
+      if (tunnelInfluence > 0.02) {
+        const pos = kart.getPosition();
+        const tunnelRadius = Math.max(2.4, info.halfWidth * 0.8);
+        const contactRadius = Math.max(1.25, tunnelRadius - 0.34);
+        const tunnelCenterY = info.elevation + 0.5 + tunnelRadius;
+        const sinTerm = THREE.MathUtils.clamp(
+          (info.offset / Math.max(0.001, contactRadius)),
+          -1,
+          1,
+        );
+        const vertical = THREE.MathUtils.clamp(
+          tunnelCenterY - pos.y,
+          -contactRadius,
+          contactRadius,
+        );
+        const cosTerm = THREE.MathUtils.clamp(vertical / Math.max(0.001, contactRadius), -1, 1);
+        const angle = Math.atan2(sinTerm, cosTerm);
+        kart.setTunnelRoll(-angle * tunnelInfluence, dt);
+      } else {
+        kart.setTunnelRoll(0, dt);
       }
     }
   }
@@ -1323,7 +1409,8 @@ export class Game {
       .slice(0, 3)
       .map(id => this.playerNames[id] ?? `P${id + 1}`)
       .join(' · ');
-    this.showRaceAnnouncement('RACE OVER', `Top 3: ${top3Names}`, 1900);
+    const endTitle = this.gameMode === 'derby' ? 'DERBY OVER' : 'DUEL OVER';
+    this.showRaceAnnouncement(endTitle, `Top 3: ${top3Names}`, 1900);
   }
 
   private showRaceAnnouncement(title: string, subtitle?: string, durationMs = 2200) {
@@ -1414,6 +1501,7 @@ export class Game {
         tk.speed, tk.maxSpeedPublic,
         tk.drifting, tk.driftDirection,
         tk.speedBoostActive,
+        tk.getTunnelRoll() * 0.82,
       );
       return;
     }
@@ -1489,7 +1577,7 @@ export class Game {
   }
 
   private getPositions(): number[] {
-    const prog = this.karts.map(k => k.lap * this.track.checkpoints.length + k.lastCheckpoint);
+    const prog = this.karts.map(k => k.lap * this.route.checkpoints.length + k.lastCheckpoint);
     const indexed = prog.map((p, i) => ({ p, i }));
     indexed.sort((a, b) => b.p - a.p);
     const result = new Array(NUM_PLAYERS);
@@ -1509,7 +1597,8 @@ export class Game {
         lastCheckpoint: k.lastCheckpoint,
         chainLength: k.getChainLength(),
       })),
-      this.track.checkpoints.length,
+      this.route.checkpoints.length,
+      this.gameMode,
     );
     const rankByPlayer = new Array(NUM_PLAYERS).fill(NUM_PLAYERS - 1);
     for (let place = 0; place < placementOrder.length && place < NUM_PLAYERS; place++) {
@@ -1536,11 +1625,12 @@ export class Game {
   private checkRaceEnd() {
     if (this.raceEndTimeoutId !== null) return;
     const racePlayers = this.karts.map(k => ({ finished: k.finished, eliminated: k.isEliminated() }));
-    if (shouldEndRace(racePlayers, 3)) {
+    if (shouldEndRace(racePlayers, 3, this.gameMode, this.raceTime * 1000)) {
       const top3 = this.pickTopPlacements(3);
       this.raceActive = false;
       const top3Names = top3.map(id => this.playerNames[id] ?? `P${id + 1}`).join(' · ');
-      this.showRaceAnnouncement('RACE OVER', `Top 3: ${top3Names}`, 1900);
+      const endTitle = this.gameMode === 'derby' ? 'DERBY OVER' : 'DUEL OVER';
+      this.showRaceAnnouncement(endTitle, `Top 3: ${top3Names}`, 1900);
       this.raceEndTimeoutId = window.setTimeout(() => {
         this.raceEndTimeoutId = null;
         this.onFinished(top3);
@@ -1558,7 +1648,8 @@ export class Game {
         lastCheckpoint: k.lastCheckpoint,
         chainLength: k.getChainLength(),
       })),
-      this.track.checkpoints.length,
+      this.route.checkpoints.length,
+      this.gameMode,
     );
     return placements.slice(0, count);
   }

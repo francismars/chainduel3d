@@ -7,14 +7,14 @@ import { LNBitsClient } from './lnbits';
 import { EscrowManager } from './escrow';
 import { RoomManager } from './room';
 import { RaceAuthority } from './race-authority';
-import { TrackCatalog } from './tracks';
-import type { ChainClass, RoomClientMessage, RoomServerMessage, StartRoomRequest, TrackCustomLayout } from '../../shared/types';
+import { RouteCatalog } from './routes';
+import type { ChainClass, GameMode, RoomClientMessage, RoomServerMessage, StartRoomRequest, RouteCustomLayout } from '../../shared/types';
 
 type JoinRoomRequest = { code: string; name: string };
 
 dotenv.config();
 
-const PORT = parseInt(process.env.PORT || '3333');
+const PORT = parseInt(process.env.PORT || '3000');
 
 const app = express();
 app.use(express.json());
@@ -29,10 +29,10 @@ const lnbits = new LNBitsClient({
 const sessions = new SessionManager();
 const escrow = new EscrowManager(lnbits, sessions);
 const rooms = new RoomManager();
-const tracks = new TrackCatalog();
-const TRACK_ADMIN_SECRET = process.env.TRACK_ADMIN_SECRET || '';
-if (!TRACK_ADMIN_SECRET) {
-  console.warn('[admin] TRACK_ADMIN_SECRET is not set; admin track endpoints are disabled.');
+const routes = new RouteCatalog();
+const ROUTE_ADMIN_SECRET = process.env.ROUTE_ADMIN_SECRET || '';
+if (!ROUTE_ADMIN_SECRET) {
+  console.warn('[admin] ROUTE_ADMIN_SECRET is not set; admin route endpoints are disabled.');
 }
 
 // --- REST API ---
@@ -116,7 +116,8 @@ app.post('/api/rooms', (req, res) => {
         aiCount: settings.aiCount ?? 3,
         maxHumans: 4,
         chainClasses: Array.isArray(settings.chainClasses) ? settings.chainClasses.slice(0, 4) : ['balanced', 'balanced', 'balanced', 'balanced'],
-        trackId: typeof settings.trackId === 'string' ? settings.trackId : 'default',
+        routeId: typeof settings.routeId === 'string' ? settings.routeId : 'default',
+        mode: settings.mode === 'derby' ? 'derby' : 'classic',
       },
       spectatorHost,
     });
@@ -152,7 +153,7 @@ app.get('/api/rooms/:roomId', (req, res) => {
 
 app.post('/api/rooms/:roomId/settings', (req, res) => {
   try {
-    const body = req.body as StartRoomRequest & { settings?: { laps?: number; aiCount?: number; chainClasses?: ChainClass[]; trackId?: string } };
+    const body = req.body as StartRoomRequest & { settings?: { laps?: number; aiCount?: number; chainClasses?: ChainClass[]; routeId?: string; mode?: GameMode } };
     const room = rooms.patchSettings(
       req.params.roomId,
       body.memberId,
@@ -169,13 +170,17 @@ app.post('/api/rooms/:roomId/settings', (req, res) => {
 app.post('/api/rooms/:roomId/start', (req, res) => {
   try {
     const body = req.body as StartRoomRequest;
+    if (!isValidRouteLayoutInput(body.routeLayout)) {
+      res.status(400).json({ error: 'Invalid route layout payload' });
+      return;
+    }
     const roomState = rooms.get(req.params.roomId);
-    const selectedTrackId = body.trackId ?? roomState?.settings.trackId ?? 'default';
-    let resolvedLayout: TrackCustomLayout | null = body.trackLayout ?? null;
-    if (selectedTrackId) {
-      const selected = tracks.get(selectedTrackId);
+    const selectedRouteId = body.routeId ?? roomState?.settings.routeId ?? 'default';
+    let resolvedLayout: RouteCustomLayout | null = body.routeLayout ?? null;
+    if (selectedRouteId) {
+      const selected = routes.get(selectedRouteId);
       if (!selected) {
-        res.status(400).json({ error: 'Track not found' });
+        res.status(400).json({ error: 'Route not found' });
         return;
       }
       resolvedLayout = selected.layout;
@@ -185,7 +190,7 @@ app.post('/api/rooms/:roomId/start', (req, res) => {
       body.memberId,
       body.memberToken,
       resolvedLayout,
-      selectedTrackId,
+      selectedRouteId,
     );
     broadcastRoomState(room.roomId);
     res.json({ room });
@@ -194,58 +199,66 @@ app.post('/api/rooms/:roomId/start', (req, res) => {
   }
 });
 
-app.get('/api/tracks', (_req, res) => {
-  res.json({ tracks: tracks.list() });
+app.get('/api/routes', (_req, res) => {
+  res.json({ routes: routes.list() });
 });
 
-app.get('/api/tracks/:trackId', (req, res) => {
-  const track = tracks.get(req.params.trackId);
-  if (!track) {
-    res.status(404).json({ error: 'Track not found' });
+app.get('/api/routes/:routeId', (req, res) => {
+  const route = routes.get(req.params.routeId);
+  if (!route) {
+    res.status(404).json({ error: 'Route not found' });
     return;
   }
-  res.json({ track });
+  res.json({ route });
 });
 
-app.post('/api/admin/tracks', (req, res) => {
+app.post('/api/admin/routes', (req, res) => {
   if (!isAdminAuthorized(req)) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
   const name = String(req.body?.name || '').trim();
-  const layout = (req.body?.layout ?? null) as TrackCustomLayout | null;
+  const layout = (req.body?.layout ?? null) as RouteCustomLayout | null;
+  if (!isValidRouteLayoutInput(layout)) {
+    res.status(400).json({ error: 'Invalid route layout payload' });
+    return;
+  }
   const id = typeof req.body?.id === 'string' ? req.body.id : undefined;
   if (!name) {
     res.status(400).json({ error: 'Missing track name' });
     return;
   }
-  const track = tracks.upsert({ id, name, layout });
-  res.json({ track });
+  const route = id ? routes.upsert({ id, name, layout }) : routes.create(name, layout);
+  res.json({ route });
 });
 
-app.put('/api/admin/tracks/:trackId', (req, res) => {
+app.put('/api/admin/routes/:routeId', (req, res) => {
   if (!isAdminAuthorized(req)) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
-  const existing = tracks.get(req.params.trackId);
+  const existing = routes.get(req.params.routeId);
   if (!existing) {
-    res.status(404).json({ error: 'Track not found' });
+    res.status(404).json({ error: 'Route not found' });
     return;
   }
   const name = String(req.body?.name || existing.name).trim();
-  const layout = (req.body?.layout ?? existing.layout ?? null) as TrackCustomLayout | null;
-  const track = tracks.upsert({ id: req.params.trackId, name, layout });
-  res.json({ track });
+  const layout = (req.body?.layout ?? existing.layout ?? null) as RouteCustomLayout | null;
+  if (!isValidRouteLayoutInput(layout)) {
+    res.status(400).json({ error: 'Invalid route layout payload' });
+    return;
+  }
+  const route = routes.upsert({ id: req.params.routeId, name, layout });
+  res.json({ route });
 });
 
-app.delete('/api/admin/tracks/:trackId', (req, res) => {
+app.delete('/api/admin/routes/:routeId', (req, res) => {
   if (!isAdminAuthorized(req)) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
-  if (!tracks.remove(req.params.trackId)) {
-    res.status(400).json({ error: 'Cannot delete track' });
+  if (!routes.remove(req.params.routeId)) {
+    res.status(400).json({ error: 'Cannot delete route' });
     return;
   }
   res.json({ ok: true });
@@ -358,12 +371,32 @@ function broadcastRoomState(roomId: string) {
 }
 
 function isAdminAuthorized(req: express.Request): boolean {
-  if (!TRACK_ADMIN_SECRET) return false;
-  const secret = String(req.header('x-admin-secret') || '');
-  return secret === TRACK_ADMIN_SECRET;
+  if (!ROUTE_ADMIN_SECRET) return false;
+  const headerSecret = String(req.header('x-admin-secret') || '').trim();
+  const authHeader = String(req.header('authorization') || '').trim();
+  const bearerSecret = authHeader.toLowerCase().startsWith('bearer ')
+    ? authHeader.slice(7).trim()
+    : '';
+  const provided = headerSecret || bearerSecret;
+  return provided.length > 0 && provided === ROUTE_ADMIN_SECRET.trim();
+}
+
+function isValidRouteLayoutInput(layout: unknown): boolean {
+  if (layout == null) return true;
+  if (typeof layout !== 'object') return false;
+  const v = layout as Record<string, unknown>;
+  if (!Array.isArray(v.main)) return false;
+  const layoutType = v.layoutType === 'arena' ? 'arena' : 'loop';
+  if (layoutType === 'loop' && v.main.length < 4) return false;
+  if (layoutType === 'arena') {
+    const rx = Number(v.arenaRadiusX ?? 84);
+    const rz = Number(v.arenaRadiusZ ?? 74);
+    if (!Number.isFinite(rx) || !Number.isFinite(rz) || rx < 24 || rz < 24) return false;
+  }
+  return true;
 }
 
 server.listen(PORT, () => {
-  console.log(`BlockKart server running on port ${PORT}`);
+  console.log(`CHAINDUEL3D server running on port ${PORT}`);
   console.log(`LNBits URL: ${process.env.LNBITS_URL || 'not configured'}`);
 });

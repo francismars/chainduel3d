@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
-export interface KartConfig {
+export interface ChainRiderConfig {
   color: number;
   startPosition: CANNON.Vec3;
   startRotation: number;
@@ -17,7 +17,7 @@ export const DRIFT_LEVEL: Record<string, number> = {
   PURPLE: 3,
 };
 
-export class Kart {
+export class ChainRider {
   public body!: CANNON.Body;
   public mesh: THREE.Group;
 
@@ -79,14 +79,22 @@ export class Kart {
   private segmentBodies: CANNON.Body[] = [];
   private segmentMeshes: THREE.Mesh[] = [];
   private linkConstraints: CANNON.DistanceConstraint[] = [];
+  private segmentRenderY: number[] = [];
+  private segmentFloorY: number[] = [];
 
   private sparkGroup: THREE.Group;
   private boostExhaust!: THREE.Mesh;
+  private tunnelContactGlow!: THREE.Mesh;
   public readonly chainClass: ChainClass;
   private raceBalanceAssist = 1;
   private authoritativeControlEnabled = true;
+  private tunnelRoll = 0;
+  private readonly segmentTargetQuat = new THREE.Quaternion();
+  private readonly segmentCurrentQuat = new THREE.Quaternion();
+  private readonly segmentEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  private readonly groundSamplePos = new THREE.Vector3();
 
-  constructor(world: CANNON.World, config: KartConfig) {
+  constructor(world: CANNON.World, config: ChainRiderConfig) {
     this.world = world;
     this.color = config.color;
     this.chainClass = config.chainClass ?? 'balanced';
@@ -101,6 +109,7 @@ export class Kart {
     this.setChainLength(this.startBlocks);
     this.placeSegmentsAtStart(config.startPosition, config.startRotation);
     this.buildBoostExhaust();
+    this.buildTunnelContactGlow();
   }
 
   private applyChainClassTuning(chainClass: ChainClass) {
@@ -134,6 +143,14 @@ export class Kart {
 
   setAuthoritativeControlEnabled(enabled: boolean) {
     this.authoritativeControlEnabled = enabled;
+    this.applyAuthoritativeAxisLocks();
+  }
+
+  private applyAuthoritativeAxisLocks() {
+    const yFactor = this.authoritativeControlEnabled ? 0 : 1;
+    for (const b of this.segmentBodies) {
+      b.linearFactor.set(1, yFactor, 1);
+    }
   }
 
   private createHead(startPosition: CANNON.Vec3) {
@@ -151,11 +168,14 @@ export class Kart {
     });
     this.body.position.copy(startPosition);
     this.body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), this.heading);
+    this.body.linearFactor.set(1, this.authoritativeControlEnabled ? 0 : 1, 1);
     this.world.addBody(this.body);
     this.segmentBodies.push(this.body);
 
     const headMesh = this.makeSegmentMesh(0);
     this.segmentMeshes.push(headMesh);
+    this.segmentRenderY.push(startPosition.y);
+    this.segmentFloorY.push(startPosition.y);
     this.mesh.add(headMesh);
   }
 
@@ -179,7 +199,7 @@ export class Kart {
     const t = Math.min(index / Math.max(this.maxBlocks - 1, 1), 1);
     const half = THREE.MathUtils.lerp(0.41, 0.25, t);
     const mass = THREE.MathUtils.lerp(1.8, 1.0, t);
-    return new CANNON.Body({
+    const body = new CANNON.Body({
       mass,
       shape: new CANNON.Box(new CANNON.Vec3(half, half, half)),
       material: new CANNON.Material({ friction: 0, restitution: 0.02 }),
@@ -189,6 +209,8 @@ export class Kart {
       collisionFilterGroup: 1,
       collisionFilterMask: 0,
     });
+    body.linearFactor.set(1, this.authoritativeControlEnabled ? 0 : 1, 1);
+    return body;
   }
 
   private rebuildConstraints() {
@@ -229,6 +251,8 @@ export class Kart {
 
       const m = this.makeSegmentMesh(idx);
       this.segmentMeshes.push(m);
+      this.segmentRenderY.push(this.body.position.y);
+      this.segmentFloorY.push(this.body.position.y);
       this.mesh.add(m);
     }
 
@@ -237,6 +261,8 @@ export class Kart {
       this.world.removeBody(body);
       const mesh = this.segmentMeshes.pop()!;
       this.mesh.remove(mesh);
+      this.segmentRenderY.pop();
+      this.segmentFloorY.pop();
     }
 
     this.chainLength = clamped;
@@ -296,6 +322,7 @@ export class Kart {
     driftDirection = 0,
     driftCharge = 0,
     eliminated = false,
+    forceSnap = false,
   ) {
     const wasDrifting = this.drifting;
     const prevHeading = this.heading;
@@ -323,9 +350,11 @@ export class Kart {
     this.driftVisualAngle += (targetSlide - this.driftVisualAngle) * blend;
 
     const headingDelta = Math.atan2(Math.sin(heading - prevHeading), Math.cos(heading - prevHeading));
-    this.heading = prevHeading + headingDelta * Math.min(1, Math.max(0, dt * 14));
-    const posBlendXZ = Math.min(1, Math.max(0.18, dt * 18));
-    const posBlendY = Math.min(1, Math.max(0.32, dt * 22));
+    this.heading = forceSnap
+      ? heading
+      : (prevHeading + headingDelta * Math.min(1, Math.max(0, dt * 14)));
+    const posBlendXZ = forceSnap ? 1 : Math.min(1, Math.max(0.18, dt * 18));
+    const posBlendY = forceSnap ? 1 : Math.min(1, Math.max(0.32, dt * 22));
     this.body.position.x = prevX + (x - prevX) * posBlendXZ;
     this.body.position.y = prevY + (y - prevY) * posBlendY;
     this.body.position.z = prevZ + (z - prevZ) * posBlendXZ;
@@ -492,15 +521,19 @@ export class Kart {
     const subSteps = Math.max(1, Math.min(4, Math.ceil(clampedDt / (1 / 120))));
     const stepDt = clampedDt / subSteps;
 
-    const velGain = 18;
-    const maxFollowSpeedBase = 24;
+    const velGain = 24;
+    const maxFollowSpeedBase = 30;
 
     for (let s = 0; s < subSteps; s++) {
       for (let i = 1; i < this.chainLength; i++) {
         const prev = this.segmentBodies[i - 1];
         const cur = this.segmentBodies[i];
+        const linkT = this.chainLength <= 2 ? 0 : (i - 1) / (this.chainLength - 2);
+        // Stiffness profile: keep front links tighter; tail slightly softer.
+        const stiffness = THREE.MathUtils.lerp(1.2, 0.92, linkT);
 
         const toPrevX = prev.position.x - cur.position.x;
+        const toPrevY = prev.position.y - cur.position.y;
         const toPrevZ = prev.position.z - cur.position.z;
         const dist = Math.sqrt(toPrevX * toPrevX + toPrevZ * toPrevZ) || 0.0001;
         const nx = toPrevX / dist;
@@ -511,13 +544,22 @@ export class Kart {
         const errX = desiredX - cur.position.x;
         const errZ = desiredZ - cur.position.z;
 
-        // Small positional nudge prevents lagging clusters without snapping.
-        const nudgeFactor = Math.min(0.2, 0.65 * stepDt);
-        cur.position.x += THREE.MathUtils.clamp(errX * nudgeFactor, -0.08, 0.08);
-        cur.position.z += THREE.MathUtils.clamp(errZ * nudgeFactor, -0.08, 0.08);
+        // Project toward ideal spacing before velocity solve so links read
+        // as connected blocks, not loose followers.
+        const stretch = dist - this.segmentSpacing;
+        if (Math.abs(stretch) > 0.001) {
+          const corr = THREE.MathUtils.clamp(stretch * (0.55 * stiffness), -0.2, 0.2);
+          cur.position.x += nx * corr;
+          cur.position.z += nz * corr;
+        }
 
-        let vx = cur.velocity.x * 0.93 + errX * velGain * stepDt;
-        let vz = cur.velocity.z * 0.93 + errZ * velGain * stepDt;
+        // Small positional nudge prevents lagging clusters without snapping.
+        const nudgeFactor = Math.min(0.36, 1.0 * stepDt * stiffness);
+        cur.position.x += THREE.MathUtils.clamp(errX * nudgeFactor, -0.14, 0.14);
+        cur.position.z += THREE.MathUtils.clamp(errZ * nudgeFactor, -0.14, 0.14);
+
+        let vx = cur.velocity.x * 0.9 + errX * velGain * stiffness * stepDt;
+        let vz = cur.velocity.z * 0.9 + errZ * velGain * stiffness * stepDt;
 
         const maxFollowSpeed = maxFollowSpeedBase + i * 1.5;
         const speed = Math.sqrt(vx * vx + vz * vz);
@@ -530,13 +572,50 @@ export class Kart {
         cur.velocity.x = vx;
         cur.velocity.z = vz;
 
-        if (!this.airborne) {
-          cur.position.y += (prev.position.y - cur.position.y) * 0.34;
-          cur.velocity.y = prev.velocity.y * 0.6;
+        // Hard spacing bounds to prevent visible chain breakup under stress.
+        const dxNow = prev.position.x - cur.position.x;
+        const dzNow = prev.position.z - cur.position.z;
+        const dNow = Math.sqrt(dxNow * dxNow + dzNow * dzNow) || 0.0001;
+        const minD = this.segmentSpacing * 0.82;
+        const maxD = this.segmentSpacing * 1.18;
+        if (dNow < minD || dNow > maxD) {
+          const targetD = THREE.MathUtils.clamp(dNow, minD, maxD);
+          const scale = targetD / dNow;
+          cur.position.x = prev.position.x - dxNow * scale;
+          cur.position.z = prev.position.z - dzNow * scale;
         }
 
-        const yaw = Math.atan2(nx, nz);
-        cur.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), yaw);
+        if (!this.airborne) {
+          const yErr = prev.position.y - cur.position.y;
+          const yLerp = Math.abs(yErr) > 0.6 ? 0.78 : 0.56;
+          cur.position.y += THREE.MathUtils.clamp(yErr * yLerp, -0.45, 0.45);
+          // Prevent gravity-induced tail droop in authoritative (non-airborne) driving.
+          cur.velocity.y = 0;
+        }
+
+        // Use yaw + limited pitch (smoothed) to avoid jagged "stair-step" segment posing.
+        const horiz = Math.sqrt(toPrevX * toPrevX + toPrevZ * toPrevZ);
+        if (horiz > 0.0001) {
+          const yaw = Math.atan2(toPrevX, toPrevZ);
+          const pitch = Math.atan2(toPrevY, horiz);
+          const clampedPitch = THREE.MathUtils.clamp(pitch, -0.42, 0.42);
+          this.segmentEuler.set(-clampedPitch, yaw, 0, 'YXZ');
+          this.segmentTargetQuat.setFromEuler(this.segmentEuler);
+          this.segmentCurrentQuat.set(
+            cur.quaternion.x,
+            cur.quaternion.y,
+            cur.quaternion.z,
+            cur.quaternion.w,
+          );
+          const rotBlend = Math.min(1, Math.max(0.18, stepDt * 16));
+          this.segmentCurrentQuat.slerp(this.segmentTargetQuat, rotBlend);
+          cur.quaternion.set(
+            this.segmentCurrentQuat.x,
+            this.segmentCurrentQuat.y,
+            this.segmentCurrentQuat.z,
+            this.segmentCurrentQuat.w,
+          );
+        }
       }
     }
   }
@@ -554,6 +633,30 @@ export class Kart {
     this.currentSpeed = this.speed;
 
     this.updateChainFollow(dt);
+  }
+
+  enforceSegmentGroundClearance(
+    sampleElevation: (worldPos: THREE.Vector3) => number,
+    dt: number,
+    clearance = 0.52,
+  ) {
+    if (this.airborne || this.eliminated || this.chainLength <= 1) return;
+    for (let i = 1; i < this.chainLength; i++) {
+      const b = this.segmentBodies[i];
+      this.groundSamplePos.set(b.position.x, b.position.y, b.position.z);
+      const minY = sampleElevation(this.groundSamplePos) + clearance;
+      const penetration = minY - b.position.y;
+      // Soft correction with a tiny deadzone avoids visible micro-jitter
+      // from fighting the chain follow solver on steep transitions.
+      if (penetration > 0.015) {
+        const desiredLift = penetration > 0.08 ? penetration : penetration * 0.45;
+        const maxLiftThisFrame = 1.6 * dt + 0.004;
+        b.position.y += Math.min(desiredLift, maxLiftThisFrame);
+        if (b.velocity.y < 0) {
+          b.velocity.y = Math.max(0, b.velocity.y * 0.35);
+        }
+      }
+    }
   }
 
   private endDrift() {
@@ -591,6 +694,28 @@ export class Kart {
     }
   }
 
+  setTunnelRoll(targetRoll: number, dt: number) {
+    const blend = Math.min(1, Math.max(0, dt * 6));
+    // Leaving tunnel: decay directly to neutral to avoid visible wrap spin.
+    if (Math.abs(targetRoll) < 0.001) {
+      const exitBlend = Math.min(1, Math.max(0, dt * 4.5));
+      this.tunnelRoll += (0 - this.tunnelRoll) * exitBlend;
+      if (Math.abs(this.tunnelRoll) < 0.002) this.tunnelRoll = 0;
+      return;
+    }
+    const tau = Math.PI * 2;
+    const normalized = ((targetRoll % tau) + tau) % tau;
+    const currentNorm = ((this.tunnelRoll % tau) + tau) % tau;
+    const delta = Math.atan2(Math.sin(normalized - currentNorm), Math.cos(normalized - currentNorm));
+    this.tunnelRoll += delta * blend;
+    // Keep bounded so camera doesn't clamp against huge historical revolutions.
+    this.tunnelRoll = Math.atan2(Math.sin(this.tunnelRoll), Math.cos(this.tunnelRoll));
+  }
+
+  getTunnelRoll(): number {
+    return this.tunnelRoll;
+  }
+
   activateSpeedBoost(duration: number) {
     this.speedBoostActive = true;
     this.speedBoostTimer = duration;
@@ -601,7 +726,7 @@ export class Kart {
     this.slowTimer = duration;
   }
 
-  syncMeshToPhysics() {
+  syncMeshToPhysics(sampleElevation?: (worldPos: THREE.Vector3) => number) {
     if (this.eliminated || this.chainLength <= 0) {
       this.mesh.visible = false;
       return;
@@ -618,8 +743,32 @@ export class Kart {
     for (let i = 0; i < this.chainLength; i++) {
       const b = this.segmentBodies[i];
       const m = this.segmentMeshes[i];
-      m.position.set(b.position.x, b.position.y + this.hopOffset, b.position.z);
+      let renderY = b.position.y + this.hopOffset;
+      if (sampleElevation) {
+        this.groundSamplePos.set(b.position.x, b.position.y, b.position.z);
+        const minRenderY = sampleElevation(this.groundSamplePos) + 0.52 + this.hopOffset;
+        const prevFloorY = this.segmentFloorY[i];
+        const floorY = Number.isFinite(prevFloorY)
+          ? (
+              minRenderY > prevFloorY
+                ? prevFloorY + (minRenderY - prevFloorY) * 0.58 // rise quickly to avoid clipping
+                : prevFloorY + (minRenderY - prevFloorY) * 0.12 // fall slowly to avoid chatter
+            )
+          : minRenderY;
+        this.segmentFloorY[i] = floorY;
+        if (renderY < floorY) renderY = floorY;
+      }
+      const prevRenderY = this.segmentRenderY[i];
+      const smoothY = Number.isFinite(prevRenderY)
+        ? prevRenderY + (renderY - prevRenderY) * 0.32
+        : renderY;
+      this.segmentRenderY[i] = smoothY;
+      m.position.set(b.position.x, smoothY, b.position.z);
       m.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+      if (Math.abs(this.tunnelRoll) > 0.0001) {
+        const qRoll = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), this.tunnelRoll);
+        m.quaternion.multiply(qRoll);
+      }
     }
 
     const tail = this.segmentBodies[this.chainLength - 1];
@@ -628,6 +777,11 @@ export class Kart {
       new THREE.Vector3(0, 1, 0),
       this.heading + this.driftVisualAngle,
     );
+    if (Math.abs(this.tunnelRoll) > 0.0001) {
+      this.boostExhaust.quaternion.multiply(
+        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), this.tunnelRoll),
+      );
+    }
 
     this.updateSparks();
   }
@@ -643,6 +797,20 @@ export class Kart {
     this.mesh.add(this.boostExhaust);
   }
 
+  private buildTunnelContactGlow() {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.tunnelContactGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.28), mat);
+    this.tunnelContactGlow.position.set(0, -0.12, 0.24);
+    this.tunnelContactGlow.visible = false;
+    this.mesh.add(this.tunnelContactGlow);
+  }
+
   private updateSparks() {
     const pts = (this.sparkGroup as any)._pointsRef as THREE.Points | undefined;
     if (!pts || this.chainLength <= 0) return;
@@ -652,6 +820,11 @@ export class Kart {
       new THREE.Vector3(0, 1, 0),
       this.heading + this.driftVisualAngle,
     );
+    if (Math.abs(this.tunnelRoll) > 0.0001) {
+      this.sparkGroup.quaternion.multiply(
+        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), this.tunnelRoll),
+      );
+    }
 
     const eMat = this.boostExhaust.material as THREE.MeshBasicMaterial;
     if (this.speedBoostActive) {
@@ -660,6 +833,19 @@ export class Kart {
       this.boostExhaust.scale.set(s, s, s);
     } else {
       eMat.opacity = 0;
+    }
+
+    const tunnelContact = Math.abs(this.tunnelRoll);
+    const contactMat = this.tunnelContactGlow.material as THREE.MeshBasicMaterial;
+    if (tunnelContact > 0.45 && Math.abs(this.speed) > 8) {
+      this.tunnelContactGlow.visible = true;
+      const pulse = 0.45 + 0.35 * Math.sin(performance.now() / 70);
+      contactMat.opacity = THREE.MathUtils.clamp((tunnelContact - 0.45) * 0.6 + pulse * 0.25, 0, 0.9);
+      const c = 0.85 + 0.15 * Math.sin(performance.now() / 110);
+      this.tunnelContactGlow.scale.set(1.0 + c * 0.2, 1.0, 1.0);
+    } else {
+      this.tunnelContactGlow.visible = false;
+      contactMat.opacity = 0;
     }
 
     if (!this.drifting || this.driftLevel === DRIFT_LEVEL.NONE) {
@@ -721,6 +907,11 @@ export class Kart {
     this.driftCharge = 0;
     this.driftLevel = DRIFT_LEVEL.NONE;
     this.driftVisualAngle = 0;
+    this.tunnelRoll = 0;
+    if (this.tunnelContactGlow) {
+      this.tunnelContactGlow.visible = false;
+      (this.tunnelContactGlow.material as THREE.MeshBasicMaterial).opacity = 0;
+    }
     this.airborne = false;
     this.airborneTimer = 0;
     this.airborneElapsed = 0;
@@ -728,6 +919,10 @@ export class Kart {
     this.hopOffset = 0;
     this.setChainLength(this.startBlocks);
     this.placeSegmentsAtStart(position, rotation);
+    for (let i = 0; i < this.segmentRenderY.length; i++) {
+      this.segmentRenderY[i] = position.y;
+      this.segmentFloorY[i] = position.y;
+    }
   }
 
   wallBounce(factor: number) {

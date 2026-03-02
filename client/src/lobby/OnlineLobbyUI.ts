@@ -1,16 +1,16 @@
-import { ChatMessage, RoomState } from 'shared/types';
+import { ChatMessage, GameMode, RoomState } from 'shared/types';
 
-type TrackOption = { id: string; name: string };
+type RouteOption = { id: string; name: string };
 
 type EntryActions = {
   onBackToMode: () => void;
-  onCreate: (name: string, laps: number, aiCount: number, spectatorHost: boolean, trackId: string) => void | Promise<void>;
+  onCreate: (name: string, laps: number, aiCount: number, spectatorHost: boolean, routeId: string, mode: GameMode) => void | Promise<void>;
   onJoin: (code: string, name: string) => void | Promise<void>;
 };
 
 type RoomActions = {
   onBack: () => void;
-  onPatchSettings: (settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; trackId: string }>) => void | Promise<void>;
+  onPatchSettings: (settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; routeId: string; mode: GameMode }>) => void | Promise<void>;
   onStart: () => void | Promise<void>;
   onSendChat: (text: string) => void;
 };
@@ -23,14 +23,14 @@ export class OnlineLobbyUI {
   private room: RoomState | null = null;
   private meId: string | null = null;
   private startRacePending = false;
-  private tracks: TrackOption[] = [{ id: 'default', name: 'Default Track' }];
+  private routes: RouteOption[] = [{ id: 'default', name: 'Genesis Route' }];
 
   constructor(container: HTMLElement) {
     this.container = container;
   }
 
-  setTracks(tracks: TrackOption[]) {
-    this.tracks = tracks.length > 0 ? tracks : [{ id: 'default', name: 'Default Track' }];
+  setRoutes(routes: RouteOption[]) {
+    this.routes = routes.length > 0 ? routes : [{ id: 'default', name: 'Genesis Route' }];
   }
 
   showEntry(actions: EntryActions) {
@@ -50,7 +50,7 @@ export class OnlineLobbyUI {
     wrap.appendChild(card);
 
     const title = document.createElement('div');
-    title.textContent = 'ONLINE ROOM';
+    title.textContent = 'ONLINE CHAIN HUB';
     title.style.cssText = 'color:#fff;font-size:24px;letter-spacing:2px;margin-bottom:14px;';
     card.appendChild(title);
 
@@ -82,13 +82,20 @@ export class OnlineLobbyUI {
 
     const trackSelect = document.createElement('select');
     trackSelect.style.cssText = this.inputCss();
-    for (const track of this.tracks) {
+    for (const route of this.routes) {
       const opt = document.createElement('option');
-      opt.value = track.id;
-      opt.textContent = track.name;
+      opt.value = route.id;
+      opt.textContent = route.name;
       trackSelect.appendChild(opt);
     }
-    card.appendChild(this.labelWrap('TRACK', trackSelect));
+    card.appendChild(this.labelWrap('ROUTE', trackSelect));
+    const modeSelect = document.createElement('select');
+    modeSelect.style.cssText = this.inputCss();
+    modeSelect.innerHTML = `
+      <option value="classic" selected>CLASSIC RACE</option>
+      <option value="derby">DERBY MODE</option>
+    `;
+    card.appendChild(this.labelWrap('MODE', modeSelect));
 
     const spectateOnlyLabel = document.createElement('label');
     spectateOnlyLabel.style.cssText = `
@@ -112,7 +119,7 @@ export class OnlineLobbyUI {
     card.appendChild(spectateOnlyLabel);
 
     const createBtn = document.createElement('button');
-    createBtn.textContent = 'CREATE ROOM';
+    createBtn.textContent = 'CREATE LOBBY';
     createBtn.style.cssText = this.btnCss(true);
     createBtn.onclick = () => {
       const laps = Math.max(1, Math.min(9, parseInt(lapsInput.value || '3', 10)));
@@ -123,6 +130,7 @@ export class OnlineLobbyUI {
         ai,
         spectateOnlyCheck.checked,
         trackSelect.value || 'default',
+        modeSelect.value === 'derby' ? 'derby' : 'classic',
       );
     };
     card.appendChild(createBtn);
@@ -130,7 +138,7 @@ export class OnlineLobbyUI {
     const joinRow = document.createElement('div');
     joinRow.style.cssText = 'display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:10px;';
     const codeInput = document.createElement('input');
-    codeInput.placeholder = 'ROOM CODE';
+    codeInput.placeholder = 'LOBBY CODE';
     codeInput.style.cssText = this.inputCss();
     joinRow.appendChild(codeInput);
     const joinBtn = document.createElement('button');
@@ -178,7 +186,7 @@ export class OnlineLobbyUI {
     top.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;';
     this.codeEl = document.createElement('div');
     this.codeEl.style.cssText = 'font-size:14px;color:#fff;';
-    this.codeEl.textContent = `ROOM ${room.code}`;
+    this.codeEl.textContent = `LOBBY ${room.code}`;
     top.appendChild(this.codeEl);
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'COPY INVITE LINK';
@@ -225,15 +233,23 @@ export class OnlineLobbyUI {
     const trackSelect = document.createElement('select');
     trackSelect.style.cssText = this.inputCss();
     trackSelect.disabled = !isHost || room.phase !== 'lobby';
-    const selectedTrackId = room.settings.trackId || 'default';
-    for (const track of this.tracks) {
+    const selectedRouteId = room.settings.routeId || 'default';
+    for (const route of this.routes) {
       const opt = document.createElement('option');
-      opt.value = track.id;
-      opt.textContent = track.name;
-      if (track.id === selectedTrackId) opt.selected = true;
+      opt.value = route.id;
+      opt.textContent = route.name;
+      if (route.id === selectedRouteId) opt.selected = true;
       trackSelect.appendChild(opt);
     }
-    left.appendChild(this.labelWrap('TRACK', trackSelect));
+    left.appendChild(this.labelWrap('ROUTE', trackSelect));
+    const modeSelect = document.createElement('select');
+    modeSelect.style.cssText = this.inputCss();
+    modeSelect.disabled = !isHost || room.phase !== 'lobby';
+    modeSelect.innerHTML = `
+      <option value="classic"${(room.settings.mode ?? 'classic') === 'classic' ? ' selected' : ''}>CLASSIC RACE</option>
+      <option value="derby"${room.settings.mode === 'derby' ? ' selected' : ''}>DERBY MODE</option>
+    `;
+    left.appendChild(this.labelWrap('MODE', modeSelect));
 
     const classRow = document.createElement('div');
     classRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;';
@@ -266,7 +282,8 @@ export class OnlineLobbyUI {
           const v = s.value;
           return v === 'light' || v === 'heavy' ? v : 'balanced';
         }),
-        trackId: trackSelect.value || 'default',
+        routeId: trackSelect.value || 'default',
+        mode: modeSelect.value === 'derby' ? 'derby' : 'classic',
       });
       left.appendChild(applyBtn);
     }
@@ -274,7 +291,7 @@ export class OnlineLobbyUI {
     const startBtn = document.createElement('button');
     startBtn.textContent = this.startRacePending && room.phase === 'lobby'
       ? 'STARTING...'
-      : (room.phase === 'lobby' ? 'START RACE' : 'RACE STARTED');
+      : (room.phase === 'lobby' ? 'START DUEL' : 'DUEL STARTED');
     startBtn.disabled = !isHost || room.phase !== 'lobby' || this.startRacePending;
     startBtn.style.cssText = this.btnCss(true);
     startBtn.onclick = async () => {
@@ -282,26 +299,26 @@ export class OnlineLobbyUI {
       this.startRacePending = true;
       startBtn.textContent = 'STARTING...';
       startBtn.disabled = true;
-      this.setStatus('Starting race...');
+      this.setStatus('Starting duel...');
       try {
         await actions.onStart();
       } catch (err: any) {
         this.startRacePending = false;
-        startBtn.textContent = 'START RACE';
+        startBtn.textContent = 'START DUEL';
         startBtn.disabled = !isHost || room.phase !== 'lobby';
-        this.setStatus(err?.message ?? 'Failed to start race');
+        this.setStatus(err?.message ?? 'Failed to start duel');
       }
     };
     left.appendChild(startBtn);
 
     const backBtn = document.createElement('button');
-    backBtn.textContent = 'LEAVE ROOM';
+    backBtn.textContent = 'LEAVE LOBBY';
     backBtn.style.cssText = this.secondaryBtnCss();
     backBtn.onclick = actions.onBack;
     left.appendChild(backBtn);
 
     const chatTitle = document.createElement('div');
-    chatTitle.textContent = 'ROOM CHAT';
+    chatTitle.textContent = 'LOBBY CHAT';
     chatTitle.style.cssText = 'color:#fff;font-size:14px;margin-bottom:8px;';
     right.appendChild(chatTitle);
 
@@ -335,7 +352,7 @@ export class OnlineLobbyUI {
     this.statusEl = document.createElement('div');
     this.statusEl.style.cssText = 'margin-top:8px;font-size:12px;color:#9c9c9c;min-height:18px;';
     left.appendChild(this.statusEl);
-    this.setStatus(room.phase === 'lobby' ? 'Waiting in room' : `Phase: ${room.phase}`);
+    this.setStatus(room.phase === 'lobby' ? 'Waiting in lobby' : `Phase: ${room.phase}`);
 
     this.container.appendChild(wrap);
   }

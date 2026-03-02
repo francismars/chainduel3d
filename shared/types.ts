@@ -8,6 +8,7 @@ export interface GameSession {
 }
 
 export type PlayMode = 'local' | 'online';
+export type GameMode = 'classic' | 'derby';
 export type ChainClass = 'balanced' | 'light' | 'heavy';
 export type RoomId = string;
 export type RoomCode = string;
@@ -18,7 +19,8 @@ export interface RoomSettings {
   aiCount: number;
   maxHumans: number;
   chainClasses: ChainClass[];
-  trackId: string;
+  routeId: string;
+  mode?: GameMode;
 }
 
 export interface RoomMember {
@@ -49,7 +51,7 @@ export interface OnlineRaceInput {
   sacrificeBoost: boolean;
 }
 
-export interface TrackControlPoint {
+export interface RouteControlPoint {
   x: number;
   z: number;
   w: number;
@@ -57,32 +59,57 @@ export interface TrackControlPoint {
   ramp?: boolean;
   bridge?: boolean;
   noRails?: boolean;
+  boost?: boolean;
+  loop?: boolean;
+  tunnel?: boolean;
+  tunnelWall?: boolean;
+  tunnelWallSide?: 'bottom' | 'left' | 'right';
 }
 
-export interface TrackShortcutControlPoint {
+export interface RouteShortcutControlPoint {
   x: number;
   z: number;
   e: number;
 }
 
-export interface TrackCustomLayout {
-  main: TrackControlPoint[];
-  shortcut?: TrackShortcutControlPoint[];
+export type RouteLayoutType = 'loop' | 'arena';
+export type RouteArenaShape = 'circle' | 'rounded_rect';
+
+export interface RouteArenaObstacle {
+  x: number;
+  z: number;
+  radius: number;
+  height?: number;
+}
+
+export interface RouteCustomLayout {
+  main: RouteControlPoint[];
+  shortcut?: RouteShortcutControlPoint[];
+  layoutType?: RouteLayoutType;
+  arenaShape?: RouteArenaShape;
+  arenaRadiusX?: number;
+  arenaRadiusZ?: number;
+  arenaFloorY?: number;
+  arenaWallHeight?: number;
+  arenaObstacleDensity?: number;
+  interiorObstacles?: RouteArenaObstacle[];
+  showCenterpiece?: boolean;
 }
 
 export interface RoomRaceState {
   startedAt: number;
   tick: number;
-  trackId?: string;
-  trackLayout?: TrackCustomLayout | null;
+  routeId?: string;
+  routeLayout?: RouteCustomLayout | null;
+  mode?: GameMode;
   standings?: RaceStandings;
   finishedAt?: number;
 }
 
-export interface TrackDefinition {
+export interface RouteDefinition {
   id: string;
   name: string;
-  layout: TrackCustomLayout | null;
+  layout: RouteCustomLayout | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -90,6 +117,8 @@ export interface TrackDefinition {
 export interface RaceStandings {
   placementOrder: number[];
   rankByPlayer: number[];
+  survivors?: number;
+  eliminatedOrder?: number[];
 }
 
 export interface OnlinePlayerState {
@@ -143,6 +172,7 @@ export interface OnlineRaceSnapshot {
   players: OnlinePlayerState[];
   itemBoxes?: OnlineItemBoxState[];
   obstacles?: OnlineObstacleState[];
+  mode?: GameMode;
   standings?: RaceStandings;
   events?: OnlineRaceEvent[];
   at: number;
@@ -192,8 +222,8 @@ export interface PatchRoomSettingsRequest {
 export interface StartRoomRequest {
   memberId: string;
   memberToken: string;
-  trackId?: string;
-  trackLayout?: TrackCustomLayout | null;
+  routeId?: string;
+  routeLayout?: RouteCustomLayout | null;
 }
 
 export interface LeaveRoomRequest {

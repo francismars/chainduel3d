@@ -1,17 +1,93 @@
 import { LobbyUI } from './lobby/LobbyUI';
 import { OnlineLobbyUI } from './lobby/OnlineLobbyUI';
 import { Game } from './game/Game';
-import { ChainClass } from './game/Kart';
-import { Track } from './game/Track';
+import { ChainClass } from './game/ChainRider';
+import {
+  Route,
+  SPONSOR_BANNER_MIN_ASPECT_RATIO,
+  SPONSOR_FLAG_MAX_ASPECT_RATIO,
+  type SponsorSurfaceKind,
+} from './game/Route';
 import { PaymentUI } from './lobby/PaymentUI';
 import { ResultUI } from './lobby/ResultUI';
-import { ChatMessage, GAME_CONFIG, OnlineRaceSnapshot, RoomState, TrackCustomLayout, TrackDefinition } from 'shared/types';
+import { ChatMessage, GAME_CONFIG, GameMode, OnlineRaceSnapshot, RoomState, RouteCustomLayout, RouteDefinition } from 'shared/types';
 import { RoomClient } from './online/RoomClient';
 
-type AppState = 'mode' | 'lobby' | 'online_entry' | 'online_room' | 'admin' | 'payment' | 'racing' | 'result';
-type TrackOption = { id: string; name: string };
+const SPONSOR_LOGO_IMPORTS = import.meta.glob('./assets/sponsors/*.{png,jpg,jpeg,webp,svg}', {
+  eager: true,
+  import: 'default',
+}) as Record<string, string>;
 
-class ChainRaceApp {
+const SPONSOR_LOGO_URLS = Object.values(SPONSOR_LOGO_IMPORTS);
+
+interface SponsorPreviewRow {
+  sourcePath: string;
+  filename: string;
+  width: number | null;
+  height: number | null;
+  ratio: number | null;
+  kind: SponsorSurfaceKind | 'invalid';
+  issue?: string;
+}
+
+const formatSponsorThresholds = () =>
+  `flag <= ${SPONSOR_FLAG_MAX_ASPECT_RATIO.toFixed(2)} | banner >= ${SPONSOR_BANNER_MIN_ASPECT_RATIO.toFixed(2)} | else billboard`;
+
+const classifySponsorKind = (ratio: number): SponsorSurfaceKind => {
+  if (ratio >= SPONSOR_BANNER_MIN_ASPECT_RATIO) return 'banner';
+  if (ratio <= SPONSOR_FLAG_MAX_ASPECT_RATIO) return 'flag';
+  return 'billboard';
+};
+
+const parseSponsorFilename = (sourcePath: string): string => {
+  const normalized = sourcePath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  return segments[segments.length - 1] ?? sourcePath;
+};
+
+const loadImageMeta = (url: string): Promise<{ width: number; height: number }> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => reject(new Error('Image failed to load'));
+    img.src = url;
+  });
+
+const loadSponsorPreviewRows = async (): Promise<SponsorPreviewRow[]> => {
+  const tasks = Object.entries(SPONSOR_LOGO_IMPORTS).map(async ([sourcePath, url]) => {
+    const filename = parseSponsorFilename(sourcePath);
+    try {
+      const { width, height } = await loadImageMeta(url);
+      const ratio = width / Math.max(1, height);
+      return {
+        sourcePath,
+        filename,
+        width,
+        height,
+        ratio,
+        kind: classifySponsorKind(ratio),
+      } satisfies SponsorPreviewRow;
+    } catch {
+      return {
+        sourcePath,
+        filename,
+        width: null,
+        height: null,
+        ratio: null,
+        kind: 'invalid',
+        issue: 'load failed',
+      } satisfies SponsorPreviewRow;
+    }
+  });
+  const rows = await Promise.all(tasks);
+  rows.sort((a, b) => a.filename.localeCompare(b.filename));
+  return rows;
+};
+
+type AppState = 'mode' | 'lobby' | 'online_entry' | 'online_room' | 'admin' | 'payment' | 'racing' | 'result';
+type RouteOption = { id: string; name: string };
+
+class ChainDuel3DApp {
   private container: HTMLElement;
   private state: AppState = 'mode';
   private lobbyUI: LobbyUI;
@@ -32,8 +108,11 @@ class ChainRaceApp {
   private latestRoomSnapshot: OnlineRaceSnapshot | null = null;
   private onlineFinishHandled = false;
   private onlineFinishTransitionTimeoutId: number | null = null;
-  private selectedTrackId = 'default';
-  private tracks: TrackOption[] = [{ id: 'default', name: 'Default Track' }];
+  private selectedRouteId = 'default';
+  private routes: RouteOption[] = [{ id: 'default', name: 'Genesis Route' }];
+  private sponsorPreviewRows: SponsorPreviewRow[] | null = null;
+  private sponsorPreviewLoading = false;
+  private gameMode: GameMode = 'classic';
 
   constructor() {
     this.container = document.getElementById('app')!;
@@ -42,8 +121,8 @@ class ChainRaceApp {
     this.paymentUI = new PaymentUI(this.container);
     this.resultUI = new ResultUI(this.container);
     this.roomClient = new RoomClient();
-    this.lobbyUI.setTracks(this.tracks);
-    this.onlineLobbyUI.setTracks(this.tracks);
+    this.lobbyUI.setRoutes(this.routes);
+    this.onlineLobbyUI.setRoutes(this.routes);
     this.roomClient.setHandlers({
       onRoomState: room => this.onRoomState(room),
       onChatMessage: (_roomId, msg) => this.onRoomChat(msg),
@@ -57,7 +136,7 @@ class ChainRaceApp {
     });
     const url = new URL(window.location.href);
     this.onlineInviteCodeFromUrl = url.searchParams.get('room');
-    void this.refreshTracks();
+    void this.refreshRoutes();
     this.showModeMenu();
   }
 
@@ -77,7 +156,7 @@ class ChainRaceApp {
     `;
     wrap.appendChild(card);
     const title = document.createElement('div');
-    title.textContent = 'CHAIN RACE';
+    title.textContent = 'CHAINDUEL3D';
     title.style.cssText = 'font-size:40px;letter-spacing:6px;color:#fff;text-align:center;margin-bottom:16px;';
     card.appendChild(title);
     const localBtn = document.createElement('button');
@@ -121,10 +200,11 @@ class ChainRaceApp {
     this.state = 'online_entry';
     this.onlineLobbyUI.showEntry({
       onBackToMode: () => this.showModeMenu(),
-      onCreate: async (name, laps, aiCount, spectatorHost, trackId) => {
+      onCreate: async (name, laps, aiCount, spectatorHost, routeId, mode) => {
         try {
-          this.selectedTrackId = trackId || 'default';
-          const created = await this.roomClient.createRoom(name, laps, aiCount, spectatorHost, this.selectedTrackId);
+          this.selectedRouteId = routeId || 'default';
+          this.gameMode = mode ?? 'classic';
+          const created = await this.roomClient.createRoom(name, laps, aiCount, spectatorHost, this.selectedRouteId, this.gameMode);
           this.onlineMemberId = created.memberId;
           this.showOnlineRoom(created.room);
         } catch (err: any) {
@@ -161,7 +241,7 @@ class ChainRaceApp {
         this.showModeMenu();
       },
       onPatchSettings: s => this.roomClient.patchSettings(s),
-      onStart: () => this.roomClient.startRace(null, room.settings.trackId),
+      onStart: () => this.roomClient.startRace(null, room.settings.routeId),
       onSendChat: txt => this.roomClient.sendChat(txt),
     });
   }
@@ -173,14 +253,16 @@ class ChainRaceApp {
     wager: number,
     laps: number,
     skipPayment: boolean,
-    trackId: string,
+    routeId: string,
+    mode: GameMode,
   ) {
     this.playerNames = playerNames;
     this.isAI = isAI;
     this.chainClasses = chainClasses;
     this.wagerAmount = wager;
     this.totalLaps = laps;
-    this.selectedTrackId = trackId || 'default';
+    this.selectedRouteId = routeId || 'default';
+    this.gameMode = mode ?? 'classic';
 
     if (!skipPayment) {
       this.state = 'payment';
@@ -209,7 +291,7 @@ class ChainRaceApp {
   }
 
   private async startRace() {
-    const trackLayout = await this.resolveTrackLayout(this.selectedTrackId);
+    const routeLayout = await this.resolveRouteLayout(this.selectedRouteId);
     this.state = 'racing';
     this.container.innerHTML = '';
     this.game = new Game(
@@ -219,7 +301,9 @@ class ChainRaceApp {
       this.chainClasses,
       this.totalLaps,
       undefined,
-      trackLayout,
+      routeLayout,
+      SPONSOR_LOGO_URLS,
+      this.gameMode,
       this.onRaceFinished.bind(this),
     );
     this.game.start();
@@ -245,6 +329,7 @@ class ChainRaceApp {
       }
     }
     const localSlot = room.members.find(m => m.memberId === this.onlineMemberId)?.slotIndex ?? -1;
+    this.gameMode = room.settings.mode ?? 'classic';
     this.state = 'racing';
     this.onlineFinishHandled = false;
     this.container.innerHTML = '';
@@ -261,9 +346,11 @@ class ChainRaceApp {
         localSlot,
         sendInput: input => this.roomClient.sendInput(input),
         getOnlineStartAt: () => this.onlineRoom?.race?.startedAt ?? null,
-        trackLayout: room.race?.trackLayout ?? null,
+        routeLayout: room.race?.routeLayout ?? null,
       },
       null,
+      SPONSOR_LOGO_URLS,
+      this.gameMode,
       this.onRaceFinished.bind(this),
     );
     if (this.latestRoomSnapshot) {
@@ -309,7 +396,7 @@ class ChainRaceApp {
         });
         if (res.ok) {
           const data = await res.json();
-          this.resultUI.show(winnerName, top3Names, data.amount, data.lnurl, () => this.showModeMenu());
+          this.resultUI.show(winnerName, top3Names, data.amount, data.lnurl, () => this.showModeMenu(), this.gameMode);
           return;
         }
       } catch { /* fall through to simple result */ }
@@ -321,32 +408,33 @@ class ChainRaceApp {
       this.wagerAmount * 2 * (1 - GAME_CONFIG.REVENUE_SPLIT_PERCENT / 100),
       null,
       () => this.showModeMenu(),
+      this.gameMode,
     );
   }
 
-  private async refreshTracks() {
+  private async refreshRoutes() {
     try {
-      const res = await fetch('/api/tracks');
+      const res = await fetch('/api/routes');
       if (!res.ok) return;
-      const data = await res.json() as { tracks?: Array<{ id: string; name: string }> };
-      const tracks = Array.isArray(data.tracks) && data.tracks.length > 0
-        ? data.tracks.map(t => ({ id: t.id, name: t.name }))
-        : [{ id: 'default', name: 'Default Track' }];
-      this.tracks = tracks;
-      if (!this.tracks.some(t => t.id === this.selectedTrackId)) this.selectedTrackId = this.tracks[0].id;
-      this.lobbyUI.setTracks(this.tracks);
-      this.onlineLobbyUI.setTracks(this.tracks);
+      const data = await res.json() as { routes?: Array<{ id: string; name: string }> };
+      const routes = Array.isArray(data.routes) && data.routes.length > 0
+        ? data.routes.map(t => ({ id: t.id, name: t.name }))
+        : [{ id: 'default', name: 'Genesis Route' }];
+      this.routes = routes;
+      if (!this.routes.some(t => t.id === this.selectedRouteId)) this.selectedRouteId = this.routes[0].id;
+      this.lobbyUI.setRoutes(this.routes);
+      this.onlineLobbyUI.setRoutes(this.routes);
     } catch {
       // Keep defaults offline.
     }
   }
 
-  private async resolveTrackLayout(trackId: string): Promise<TrackCustomLayout | null> {
+  private async resolveRouteLayout(routeId: string): Promise<RouteCustomLayout | null> {
     try {
-      const res = await fetch(`/api/tracks/${encodeURIComponent(trackId || 'default')}`);
+      const res = await fetch(`/api/routes/${encodeURIComponent(routeId || 'default')}`);
       if (!res.ok) return null;
-      const data = await res.json() as { track?: TrackDefinition };
-      return data.track?.layout ?? null;
+      const data = await res.json() as { route?: RouteDefinition };
+      return data.route?.layout ?? null;
     } catch {
       return null;
     }
@@ -368,32 +456,45 @@ class ChainRaceApp {
     `;
     wrap.appendChild(card);
     const title = document.createElement('div');
-    title.textContent = 'ADMIN TRACK CATALOG';
+    title.textContent = 'ADMIN ROUTE CATALOG';
     title.style.cssText = 'font-size:24px;letter-spacing:2px;color:#fff;margin-bottom:12px;';
     card.appendChild(title);
 
     const secretInput = document.createElement('input');
     secretInput.type = 'password';
-    secretInput.placeholder = 'TRACK ADMIN SECRET';
+    secretInput.placeholder = 'ROUTE ADMIN SECRET';
+    const adminSecretStorageKey = 'chainduel3d.adminRouteSecret.v1';
+    secretInput.value = localStorage.getItem(adminSecretStorageKey) ?? '';
+    secretInput.addEventListener('input', () => {
+      localStorage.setItem(adminSecretStorageKey, secretInput.value);
+    });
     secretInput.style.cssText = 'width:100%;padding:10px;border-radius:6px;border:1px solid #333;background:#101010;color:#e8e8e8;';
     card.appendChild(secretInput);
 
     const status = document.createElement('div');
     status.style.cssText = 'min-height:18px;color:#9b9b9b;font-size:12px;margin:8px 0 12px;';
     card.appendChild(status);
+    const sponsorPanel = document.createElement('div');
+    sponsorPanel.style.cssText = `
+      margin-bottom:12px;padding:10px;border:1px solid #2f2f2f;border-radius:6px;background:#0d0d0d;
+      font-size:11px;line-height:1.35;color:#d9d9d9;
+    `;
+    card.appendChild(sponsorPanel);
+    this.renderSponsorPreviewPanel(sponsorPanel);
+    const getAdminSecret = () => secretInput.value.trim();
 
-    const trackSelect = document.createElement('select');
-    trackSelect.style.cssText = 'width:100%;padding:10px;border-radius:6px;border:1px solid #333;background:#101010;color:#e8e8e8;';
-    for (const t of this.tracks) {
+    const routeSelect = document.createElement('select');
+    routeSelect.style.cssText = 'width:100%;padding:10px;border-radius:6px;border:1px solid #333;background:#101010;color:#e8e8e8;';
+    for (const t of this.routes) {
       const opt = document.createElement('option');
       opt.value = t.id;
       opt.textContent = `${t.name} (${t.id})`;
-      trackSelect.appendChild(opt);
+      routeSelect.appendChild(opt);
     }
-    card.appendChild(trackSelect);
+    card.appendChild(routeSelect);
 
     const nameInput = document.createElement('input');
-    nameInput.placeholder = 'Track name (for save/update)';
+    nameInput.placeholder = 'Route name (for save/update)';
     nameInput.style.cssText = 'width:100%;padding:10px;border-radius:6px;border:1px solid #333;background:#101010;color:#e8e8e8;margin-top:8px;';
     card.appendChild(nameInput);
 
@@ -402,69 +503,145 @@ class ChainRaceApp {
     const openParamBtn = document.createElement('button');
     openParamBtn.textContent = 'OPEN PARAM EDITOR';
     openParamBtn.style.cssText = this.modeBtnCss(false);
-    openParamBtn.onclick = () => this.lobbyUI.showTrackEditor();
+    openParamBtn.onclick = () => this.lobbyUI.showRouteEditor();
     row.appendChild(openParamBtn);
     const openBuilderBtn = document.createElement('button');
     openBuilderBtn.textContent = 'OPEN GRAPHICAL BUILDER';
     openBuilderBtn.style.cssText = this.modeBtnCss(false);
-    openBuilderBtn.onclick = () => this.lobbyUI.showGraphicalTrackBuilder();
+    openBuilderBtn.onclick = () => this.lobbyUI.showGraphicalRouteBuilder();
     row.appendChild(openBuilderBtn);
     card.appendChild(row);
 
+    const loadSelectedBtn = document.createElement('button');
+    loadSelectedBtn.textContent = 'LOAD SELECTED ROUTE INTO BUILDER';
+    loadSelectedBtn.style.cssText = this.modeBtnCss(false);
+    loadSelectedBtn.onclick = async () => {
+      const selectedId = routeSelect.value || 'default';
+      try {
+        const res = await fetch(`/api/routes/${encodeURIComponent(selectedId)}`);
+        if (!res.ok) {
+          status.textContent = `Load failed: ${res.status}`;
+          return;
+        }
+        const data = await res.json() as { route?: RouteDefinition };
+        if (!data.route?.layout) {
+          status.textContent = 'Selected route has no layout.';
+          return;
+        }
+        Route.setCustomLayout(data.route.layout);
+        status.textContent = `Loaded "${data.route.name}" into builder draft.`;
+      } catch {
+        status.textContent = 'Failed to load selected route.';
+      }
+    };
+    card.appendChild(loadSelectedBtn);
+
     const saveBtn = document.createElement('button');
-    saveBtn.textContent = 'SAVE CURRENT BUILDER LAYOUT';
+    saveBtn.textContent = 'UPDATE SELECTED ROUTE FROM BUILDER';
     saveBtn.style.cssText = this.modeBtnCss(true);
     saveBtn.onclick = async () => {
-      const layout = Track.getCustomLayout();
+      const layout = Route.getCustomLayout();
       if (!layout) {
         status.textContent = 'No local builder layout found. Build one first.';
         return;
       }
-      const selectedId = trackSelect.value || '';
+      const selectedId = routeSelect.value || '';
+      if (!selectedId || selectedId === 'default') {
+        status.textContent = 'Select a non-default route to update, or use Publish as New.';
+        return;
+      }
       const payload = {
-        id: selectedId === 'default' ? undefined : selectedId,
-        name: nameInput.value.trim() || this.tracks.find(t => t.id === selectedId)?.name || 'Custom Track',
+        id: selectedId,
+        name: nameInput.value.trim() || this.routes.find(t => t.id === selectedId)?.name || 'Custom Route',
         layout,
       };
-      const method = selectedId && selectedId !== 'default' ? 'PUT' : 'POST';
-      const url = method === 'PUT' ? `/api/admin/tracks/${encodeURIComponent(selectedId)}` : '/api/admin/tracks';
+      if (!getAdminSecret()) {
+        status.textContent = 'Enter admin secret first.';
+        return;
+      }
+      const method = 'PUT';
+      const url = `/api/admin/routes/${encodeURIComponent(selectedId)}`;
       const res = await fetch(url, {
         method,
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-secret': secretInput.value,
+          'x-admin-secret': getAdminSecret(),
         },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        status.textContent = `Save failed: ${res.status}`;
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        status.textContent = `Save failed: ${res.status} ${err.error ?? ''}`.trim();
         return;
       }
-      status.textContent = 'Track saved.';
-      await this.refreshTracks();
+      status.textContent = 'Route saved.';
+      await this.refreshRoutes();
       this.showAdminMenu();
     };
     card.appendChild(saveBtn);
 
-    const deleteBtn = document.createElement('button');
-    deleteBtn.textContent = 'DELETE SELECTED TRACK';
-    deleteBtn.style.cssText = this.modeBtnCss(false);
-    deleteBtn.onclick = async () => {
-      const selectedId = trackSelect.value;
-      if (!selectedId || selectedId === 'default') {
-        status.textContent = 'Default track cannot be deleted.';
+    const publishNewBtn = document.createElement('button');
+    publishNewBtn.textContent = 'PUBLISH BUILDER AS NEW ROUTE';
+    publishNewBtn.style.cssText = this.modeBtnCss(true);
+    publishNewBtn.onclick = async () => {
+      const layout = Route.getCustomLayout();
+      if (!layout) {
+        status.textContent = 'No local builder layout found. Build one first.';
         return;
       }
-      const res = await fetch(`/api/admin/tracks/${encodeURIComponent(selectedId)}`, {
-        method: 'DELETE',
-        headers: { 'x-admin-secret': secretInput.value },
+      const customName = nameInput.value.trim();
+      const generatedName = `Custom Route ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+      const payload = {
+        name: customName || generatedName,
+        layout,
+      };
+      if (!getAdminSecret()) {
+        status.textContent = 'Enter admin secret first.';
+        return;
+      }
+      const res = await fetch('/api/admin/routes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': getAdminSecret(),
+        },
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        status.textContent = `Delete failed: ${res.status}`;
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        status.textContent = `Publish failed: ${res.status} ${err.error ?? ''}`.trim();
         return;
       }
-      status.textContent = 'Track deleted.';
-      await this.refreshTracks();
+      status.textContent = 'New route published.';
+      await this.refreshRoutes();
+      this.showAdminMenu();
+    };
+    card.appendChild(publishNewBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = 'DELETE SELECTED ROUTE';
+    deleteBtn.style.cssText = this.modeBtnCss(false);
+    deleteBtn.onclick = async () => {
+      const selectedId = routeSelect.value;
+      if (!selectedId || selectedId === 'default') {
+        status.textContent = 'Default route cannot be deleted.';
+        return;
+      }
+      if (!getAdminSecret()) {
+        status.textContent = 'Enter admin secret first.';
+        return;
+      }
+      const res = await fetch(`/api/admin/routes/${encodeURIComponent(selectedId)}`, {
+        method: 'DELETE',
+        headers: { 'x-admin-secret': getAdminSecret() },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        status.textContent = `Delete failed: ${res.status} ${err.error ?? ''}`.trim();
+        return;
+      }
+      status.textContent = 'Route deleted.';
+      await this.refreshRoutes();
       this.showAdminMenu();
     };
     card.appendChild(deleteBtn);
@@ -476,6 +653,77 @@ class ChainRaceApp {
     card.appendChild(backBtn);
 
     this.container.appendChild(wrap);
+  }
+
+  private async ensureSponsorPreviewRows(): Promise<SponsorPreviewRow[]> {
+    if (this.sponsorPreviewRows) return this.sponsorPreviewRows;
+    if (!this.sponsorPreviewLoading) {
+      this.sponsorPreviewLoading = true;
+      try {
+        this.sponsorPreviewRows = await loadSponsorPreviewRows();
+      } finally {
+        this.sponsorPreviewLoading = false;
+      }
+    }
+    return this.sponsorPreviewRows ?? [];
+  }
+
+  private renderSponsorPreviewPanel(panel: HTMLElement) {
+    panel.innerHTML = `
+      <div style="font-size:12px;color:#fff;margin-bottom:4px;">SPONSOR PREVIEW / DEBUG</div>
+      <div style="color:#9f9f9f;margin-bottom:6px;">${formatSponsorThresholds()}</div>
+      <div style="color:#8f8f8f;">Loading sponsor assets...</div>
+    `;
+    void this.populateSponsorPreviewPanel(panel);
+  }
+
+  private async populateSponsorPreviewPanel(panel: HTMLElement) {
+    const rows = await this.ensureSponsorPreviewRows();
+    if (!panel.isConnected) return;
+    const counts = {
+      flag: rows.filter(r => r.kind === 'flag').length,
+      billboard: rows.filter(r => r.kind === 'billboard').length,
+      banner: rows.filter(r => r.kind === 'banner').length,
+      invalid: rows.filter(r => r.kind === 'invalid').length,
+    };
+    const header = `
+      <div style="font-size:12px;color:#fff;margin-bottom:4px;">SPONSOR PREVIEW / DEBUG</div>
+      <div style="color:#9f9f9f;margin-bottom:6px;">${formatSponsorThresholds()}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;color:#cfcfcf;margin-bottom:6px;">
+        <span>total ${rows.length}</span>
+        <span>flags ${counts.flag}</span>
+        <span>billboards ${counts.billboard}</span>
+        <span>banners ${counts.banner}</span>
+        ${counts.invalid > 0 ? `<span style="color:#ff8c8c;">invalid ${counts.invalid}</span>` : ''}
+      </div>
+    `;
+    if (rows.length === 0) {
+      panel.innerHTML = `${header}<div style="color:#8f8f8f;">No files found in <code>client/src/assets/sponsors</code>.</div>`;
+      return;
+    }
+    const rowHtml = rows
+      .map(row => {
+        const size = row.width && row.height ? `${row.width}x${row.height}` : '-';
+        const ratio = row.ratio ? row.ratio.toFixed(2) : '-';
+        const kindColor = row.kind === 'flag'
+          ? '#92e7ff'
+          : row.kind === 'billboard'
+            ? '#b5ff9a'
+            : row.kind === 'banner'
+              ? '#ffd289'
+              : '#ff8c8c';
+        const issue = row.issue ? ` (${row.issue})` : '';
+        return `
+          <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding:4px 0;border-top:1px solid #1f1f1f;">
+            <span title="${row.sourcePath}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${row.filename}</span>
+            <span style="color:#9d9d9d;">${size}</span>
+            <span style="color:#9d9d9d;">r:${ratio}</span>
+            <span style="color:${kindColor};">${row.kind}${issue}</span>
+          </div>
+        `;
+      })
+      .join('');
+    panel.innerHTML = `${header}<div style="max-height:168px;overflow:auto;padding-right:4px;">${rowHtml}</div>`;
   }
 
   private onRoomState(room: RoomState) {
@@ -511,4 +759,4 @@ class ChainRaceApp {
   }
 }
 
-new ChainRaceApp();
+new ChainDuel3DApp();

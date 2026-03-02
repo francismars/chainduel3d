@@ -39,6 +39,7 @@ export class FollowCamera {
     drifting = false,
     driftDirection = 0,
     boosting = false,
+    tunnelRoll = 0,
   ) {
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(targetQuat);
     const rightVec = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
@@ -52,8 +53,10 @@ export class FollowCamera {
     // Roll: tilt into turns
     const left = fwd.clone().cross(new THREE.Vector3(0, 1, 0)).dot(rightVec) > 0;
     const turnDir = drifting ? driftDirection : (left ? -1 : 0);
-    const targetRoll = turnDir * this.maxRoll * speedRatio;
-    this.currentRoll += (targetRoll - this.currentRoll) * Math.min(dt * 5, 1);
+    const tunnelRollClamped = THREE.MathUtils.clamp(tunnelRoll, -0.95, 0.95);
+    const targetRoll = turnDir * this.maxRoll * speedRatio + tunnelRollClamped * 0.45;
+    const rollLerp = Math.abs(tunnelRollClamped) < 0.05 ? 5.6 : 4.8;
+    this.currentRoll += (targetRoll - this.currentRoll) * Math.min(dt * rollLerp, 1);
 
     // Drift offset: shift camera to outside of turn
     const targetDriftOffset = drifting ? -driftDirection * 1.0 : 0;
