@@ -1,5 +1,5 @@
-import { LNBitsClient } from './lnbits';
-import { SessionManager } from './session';
+import { LNBitsClient } from './lnbits.js';
+import { SessionManager } from './session.js';
 const parsedRevenueSplit = Number.parseInt(process.env.REVENUE_SPLIT_PERCENT || '5', 10);
 const GAME_CONFIG = {
   REVENUE_SPLIT_PERCENT: Number.isFinite(parsedRevenueSplit) ? parsedRevenueSplit : 5,

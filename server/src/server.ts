@@ -4,12 +4,12 @@ import http from 'http';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { SessionManager } from './session';
-import { LNBitsClient } from './lnbits';
-import { EscrowManager } from './escrow';
-import { RoomManager } from './room';
-import { RaceAuthority } from './race-authority';
-import { RouteCatalog } from './routes';
+import { SessionManager } from './session.js';
+import { LNBitsClient } from './lnbits.js';
+import { EscrowManager } from './escrow.js';
+import { RoomManager } from './room.js';
+import { RaceAuthority } from './race-authority.js';
+import { RouteCatalog } from './routes.js';
 import type { ChainClass, GameMode, RoomClientMessage, RoomServerMessage, StartRoomRequest, RouteCustomLayout } from '../../shared/types';
 
 type JoinRoomRequest = { code: string; name: string };
