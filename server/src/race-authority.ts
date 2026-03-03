@@ -1,4 +1,4 @@
-import { RoomManager, RoomState } from './room';
+import { RoomManager, RoomState } from './room.js';
 
 export class RaceAuthority {
   private timer: NodeJS.Timer | null = null;
