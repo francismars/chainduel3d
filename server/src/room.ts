@@ -46,6 +46,8 @@ export interface RoomMember {
   isHost: boolean;
   slotIndex: number;
   connected: boolean;
+  disconnectedAt?: number;
+  ready: boolean;
   joinedAt: number;
 }
 
@@ -148,6 +150,7 @@ interface CreateRoomRequest {
 
 interface InternalMember extends RoomMember {
   token: string;
+  disconnectedAt?: number;
 }
 
 interface InternalRoom {
@@ -259,6 +262,7 @@ interface SimPlayerRuntime extends SimPlayerRuntimeState {
 }
 
 export class RoomManager {
+  readonly disconnectGraceMs = 30_000;
   private readonly countdownMs = 3000;
   private readonly stealCooldownMsValue = 1100;
   private readonly sacrificeBoostCooldownMs = 2200;
@@ -303,6 +307,7 @@ export class RoomManager {
         isHost: true,
         slotIndex: req.spectatorHost ? -1 : 0,
         connected: true,
+        ready: true,
         joinedAt: now,
       }],
       chat: [],
@@ -318,6 +323,7 @@ export class RoomManager {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error('Room not found');
     if (room.phase !== 'lobby') throw new Error('Race already started');
+    this.pruneDisconnectedLobbyMembersInRoom(room, Date.now(), this.disconnectGraceMs);
     if (room.members.length >= room.settings.maxHumans) throw new Error('Room is full');
 
     const used = new Set(room.members.map(m => m.slotIndex));
@@ -334,6 +340,7 @@ export class RoomManager {
       isHost: false,
       slotIndex,
       connected: true,
+      ready: false,
       joinedAt: Date.now(),
     });
     return { room: this.toState(room), memberId, memberToken };
@@ -361,6 +368,16 @@ export class RoomManager {
     return this.toState(room);
   }
 
+  setReady(roomId: string, memberId: string, token: string, ready: boolean): RoomState {
+    const room = this.getInternalValidated(roomId, memberId, token);
+    if (room.phase !== 'lobby') throw new Error('Cannot change ready status after start');
+    const member = room.members.find(m => m.memberId === memberId);
+    if (!member) throw new Error('Member not found');
+    if (member.isHost) throw new Error('Host does not use ready status');
+    member.ready = !!ready;
+    return this.toState(room);
+  }
+
   startRace(
     roomId: string,
     memberId: string,
@@ -371,6 +388,8 @@ export class RoomManager {
     const room = this.getInternalValidated(roomId, memberId, token);
     if (room.hostMemberId !== memberId) throw new Error('Only host can start');
     if (room.phase !== 'lobby') throw new Error('Race already started');
+    const unready = room.members.filter(m => !m.isHost && m.slotIndex >= 0 && m.connected && !m.ready);
+    if (unready.length > 0) throw new Error('All connected players must be ready');
     const simSlots = this.computeSimSlots(room);
     const sanitizedLayout = this.sanitizeRouteLayout(routeLayout);
     const rngState = createSimRandomState((this.hashString(room.roomId) ^ Date.now()) >>> 0);
@@ -449,18 +468,58 @@ export class RoomManager {
     return this.toState(room);
   }
 
+  kickMember(roomId: string, memberId: string, token: string, targetMemberId: string): RoomState {
+    const room = this.getInternalValidated(roomId, memberId, token);
+    if (room.hostMemberId !== memberId) throw new Error('Only host can kick');
+    if (room.phase !== 'lobby') throw new Error('Cannot kick after race start');
+    if (targetMemberId === room.hostMemberId) throw new Error('Host cannot be kicked');
+    const before = room.members.length;
+    room.members = room.members.filter(m => m.memberId !== targetMemberId);
+    if (room.members.length === before) throw new Error('Member not found');
+    return this.toState(room);
+  }
+
+  rematch(roomId: string, memberId: string, token: string): RoomState {
+    const room = this.getInternalValidated(roomId, memberId, token);
+    if (room.phase !== 'finished') throw new Error('Rematch available after finish');
+    room.phase = 'lobby';
+    room.race = undefined;
+    for (const m of room.members) {
+      m.ready = m.isHost;
+    }
+    return this.toState(room);
+  }
+
   markDisconnected(roomId: string, memberId: string) {
     const room = this.rooms.get(roomId);
     if (!room) return;
     const m = room.members.find(x => x.memberId === memberId);
-    if (m) m.connected = false;
+    if (m) {
+      m.connected = false;
+      m.disconnectedAt = Date.now();
+    }
   }
 
   markConnected(roomId: string, memberId: string) {
     const room = this.rooms.get(roomId);
     if (!room) return;
     const m = room.members.find(x => x.memberId === memberId);
-    if (m) m.connected = true;
+    if (m) {
+      m.connected = true;
+      m.disconnectedAt = undefined;
+    }
+  }
+
+  pruneDisconnectedLobbyMembers(graceMs = this.disconnectGraceMs): string[] {
+    const changedRoomIds: string[] = [];
+    const now = Date.now();
+    for (const [roomId, room] of this.rooms.entries()) {
+      if (room.phase !== 'lobby') continue;
+      if (this.pruneDisconnectedLobbyMembersInRoom(room, now, graceMs)) {
+        changedRoomIds.push(roomId);
+      }
+    }
+    return changedRoomIds;
   }
 
   addChat(roomId: string, memberId: string, token: string, text: string): ChatMessage {
@@ -573,6 +632,29 @@ export class RoomManager {
     return room;
   }
 
+  private pruneDisconnectedLobbyMembersInRoom(room: InternalRoom, now: number, graceMs: number): boolean {
+    if (room.phase !== 'lobby') return false;
+    const before = room.members.length;
+    room.members = room.members.filter(m => {
+      if (m.connected) return true;
+      if (!m.disconnectedAt) return true;
+      return now - m.disconnectedAt < graceMs;
+    });
+    if (room.members.length === before) return false;
+
+    if (room.members.length === 0) {
+      this.rooms.delete(room.roomId);
+      this.codeToRoomId.delete(room.code);
+      return true;
+    }
+
+    if (!room.members.some(m => m.memberId === room.hostMemberId)) {
+      room.hostMemberId = room.members[0].memberId;
+      room.members[0].isHost = true;
+    }
+    return true;
+  }
+
   private toState(room: InternalRoom): RoomState {
     return {
       roomId: room.roomId,
@@ -587,6 +669,8 @@ export class RoomManager {
         isHost: m.memberId === room.hostMemberId,
         slotIndex: m.slotIndex,
         connected: m.connected,
+        disconnectedAt: m.disconnectedAt,
+        ready: m.ready,
         joinedAt: m.joinedAt,
       })),
       chat: [...room.chat],

@@ -7,6 +7,7 @@ interface PaymentData {
     player2: { bolt11: string; paymentHash: string };
   };
 }
+const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
 
 export class PaymentUI {
   private container: HTMLElement;
@@ -18,21 +19,24 @@ export class PaymentUI {
   async show(data: PaymentData): Promise<boolean> {
     return new Promise(async (resolve) => {
       this.container.innerHTML = '';
+      const compactLayout = window.innerHeight < 860;
+      const narrowLayout = window.innerWidth < 900;
 
       const wrapper = document.createElement('div');
       wrapper.style.cssText = `
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        display: flex; flex-direction: column; align-items: center; justify-content: ${compactLayout ? 'flex-start' : 'center'};
         width: 100%; height: 100%; background: #0a0a0a;
-        font-family: 'Courier New', monospace; color: #f7931a;
+        font-family: ${UI_FONT_FAMILY}; color: #f7931a;
+        overflow: auto; padding: ${compactLayout ? '10px 10px 16px' : '18px 14px 24px'}; box-sizing: border-box;
       `;
 
       const title = document.createElement('h2');
       title.textContent = 'DEPOSIT SATS';
-      title.style.cssText = 'font-size: 36px; margin-bottom: 20px; letter-spacing: 4px;';
+      title.style.cssText = `font-size: clamp(26px, 6vw, 36px); margin-bottom: ${compactLayout ? '10px' : '20px'}; letter-spacing: 4px; text-align: center;`;
       wrapper.appendChild(title);
 
       const row = document.createElement('div');
-      row.style.cssText = 'display: flex; gap: 40px;';
+      row.style.cssText = `display: grid; grid-template-columns: ${narrowLayout ? '1fr' : '1fr 1fr'}; gap: ${compactLayout ? '10px' : '20px'}; width: min(920px, 96vw);`;
 
       const players = [
         { label: 'PLAYER 1', invoice: data.invoices.player1 },
@@ -46,7 +50,7 @@ export class PaymentUI {
         col.style.cssText = `
           display: flex; flex-direction: column; align-items: center;
           background: rgba(20,20,30,0.9); border: 1px solid #333;
-          border-radius: 8px; padding: 24px;
+          border-radius: 8px; padding: ${compactLayout ? '14px' : '20px'};
         `;
 
         const label = document.createElement('div');
@@ -104,9 +108,9 @@ export class PaymentUI {
       const cancelBtn = document.createElement('button');
       cancelBtn.textContent = 'CANCEL';
       cancelBtn.style.cssText = `
-        margin-top: 24px; padding: 10px 30px; background: transparent;
+        margin-top: ${compactLayout ? '12px' : '24px'}; padding: 10px 30px; background: transparent;
         border: 1px solid #555; border-radius: 4px; color: #888;
-        font-family: 'Courier New', monospace; cursor: pointer;
+        font-family: ${UI_FONT_FAMILY}; cursor: pointer;
       `;
       cancelBtn.onclick = () => resolve(false);
       wrapper.appendChild(cancelBtn);

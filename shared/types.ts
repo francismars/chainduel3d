@@ -29,6 +29,8 @@ export interface RoomMember {
   isHost: boolean;
   slotIndex: number;
   connected: boolean;
+  disconnectedAt?: number;
+  ready: boolean;
   joinedAt: number;
 }
 
@@ -229,6 +231,18 @@ export interface StartRoomRequest {
 export interface LeaveRoomRequest {
   memberId: string;
   memberToken: string;
+}
+
+export interface KickRoomMemberRequest {
+  memberId: string;
+  memberToken: string;
+  targetMemberId: string;
+}
+
+export interface SetReadyRequest {
+  memberId: string;
+  memberToken: string;
+  ready: boolean;
 }
 
 export type RoomClientMessage =

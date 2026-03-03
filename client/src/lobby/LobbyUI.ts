@@ -12,6 +12,7 @@ import {
 } from '../game/Route';
 
 type RouteOption = { id: string; name: string };
+const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
 
 export class LobbyUI {
   private container: HTMLElement;
@@ -26,9 +27,11 @@ export class LobbyUI {
     routeId: string,
     mode: GameMode,
   ) => void;
+  private onBackToMode: () => void;
 
   constructor(
     container: HTMLElement,
+    onBackToMode: () => void,
     onStart: (
       playerNames: string[],
       isAI: boolean[],
@@ -41,6 +44,7 @@ export class LobbyUI {
     ) => void,
   ) {
     this.container = container;
+    this.onBackToMode = onBackToMode;
     this.onStart = onStart;
   }
 
@@ -50,62 +54,44 @@ export class LobbyUI {
 
   show() {
     this.container.innerHTML = '';
+    const compactLayout = window.innerHeight < 860;
 
     const wrapper = document.createElement('div');
     wrapper.style.cssText = `
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      display: flex; flex-direction: column; align-items: center; justify-content: ${compactLayout ? 'flex-start' : 'center'};
       width: 100%; height: 100%; background: radial-gradient(circle at center, #080808 0%, #000 70%);
-      font-family: 'Courier New', monospace; color: #e8e8e8;
+      overflow: auto; padding: ${compactLayout ? '10px 10px 16px' : '18px 14px 28px'}; box-sizing: border-box;
+      font-family: ${UI_FONT_FAMILY}; color: #e8e8e8;
     `;
-
-    // Title with glow
-    const title = document.createElement('h1');
-    title.textContent = 'CHAINDUEL3D';
-    title.style.cssText = `
-      font-size: 72px; margin: 0 0 8px 0; letter-spacing: 12px;
-      text-shadow: 0 0 28px rgba(255,255,255,0.28), 0 0 70px rgba(255,255,255,0.08);
-      animation: pulse 2s ease-in-out infinite;
-    `;
-    wrapper.appendChild(title);
-
-    const subtitle = document.createElement('div');
-    subtitle.textContent = 'ANATOMY OF BITCOIN CHAINS';
-    subtitle.style.cssText = `
-      font-size: 14px; color: #9f9f9f; margin-bottom: 34px; letter-spacing: 6px;
-      text-shadow: 0 0 18px rgba(255,255,255,0.1);
-    `;
-    wrapper.appendChild(subtitle);
 
     // Form container
     const form = document.createElement('div');
     form.style.cssText = `
       background: rgba(8,8,8,0.94); border: 1px solid #2a2a2a;
-      border-radius: 8px; padding: 30px; width: 420px;
-      box-shadow: 0 0 30px rgba(255,255,255,0.05);
+      border-radius: 10px; padding: ${compactLayout ? '14px' : '24px'}; width: min(${compactLayout ? '520px' : '560px'}, 92vw);
+      box-shadow: 0 0 30px rgba(255,255,255,0.05); overflow: visible;
     `;
 
     const makePlayerField = (num: number, id: string, defaultVal: string, defaultAI: boolean) => {
       const group = document.createElement('div');
-      group.style.cssText = 'margin-bottom: 12px;';
+      group.style.cssText = `margin-bottom: ${compactLayout ? '10px' : '14px'};`;
       const lbl = document.createElement('label');
       lbl.textContent = `PLAYER ${num} NAME`;
-      lbl.style.cssText = 'display: block; margin-bottom: 4px; font-size: 12px; color: #8a8a8a;';
+      lbl.style.cssText = 'display: block; margin-bottom: 6px; font-size: 12px; color: #8a8a8a;';
       group.appendChild(lbl);
 
       const row = document.createElement('div');
-      row.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+      row.style.cssText = `display: flex; align-items: center; gap: ${compactLayout ? '8px' : '10px'};`;
 
       const input = document.createElement('input');
       input.id = id;
       input.type = 'text';
       input.value = defaultVal;
       input.style.cssText = `
-        flex: 1; padding: 10px; background: #111; border: 1px solid #333;
+        flex: 1; padding: ${compactLayout ? '8px' : '10px'}; background: #111; border: 1px solid #333;
         border-radius: 4px; color: #f1f1f1; font-family: 'Courier New', monospace;
-        font-size: 16px; outline: none;
+        font-size: ${compactLayout ? '15px' : '16px'}; outline: none;
       `;
-      input.onfocus = () => input.style.borderColor = '#f1f1f1';
-      input.onblur = () => input.style.borderColor = '#333';
       row.appendChild(input);
 
       const aiLabel = document.createElement('label');
@@ -126,7 +112,7 @@ export class LobbyUI {
       cls.id = `${id}_class`;
       cls.style.cssText = `
         background:#0f0f0f;border:1px solid #333;color:#e6e6e6;
-        font-size:11px;padding:4px 6px;border-radius:4px;
+        font-size:11px;padding:${compactLayout ? '4px 5px' : '4px 6px'};border-radius:4px;
       `;
       cls.innerHTML = `
         <option value="balanced" selected>BAL</option>
@@ -141,21 +127,19 @@ export class LobbyUI {
 
     const makeField = (label: string, id: string, defaultVal: string, type = 'text') => {
       const group = document.createElement('div');
-      group.style.cssText = 'margin-bottom: 16px;';
+      group.style.cssText = `margin-bottom: ${compactLayout ? '10px' : '14px'};`;
       const lbl = document.createElement('label');
       lbl.textContent = label;
-      lbl.style.cssText = 'display: block; margin-bottom: 4px; font-size: 12px; color: #8a8a8a;';
+      lbl.style.cssText = 'display: block; margin-bottom: 6px; font-size: 12px; color: #8a8a8a;';
       const input = document.createElement('input');
       input.id = id;
       input.type = type;
       input.value = defaultVal;
       input.style.cssText = `
-        width: 100%; padding: 10px; background: #111; border: 1px solid #333;
+        width: 100%; padding: ${compactLayout ? '8px' : '10px'}; background: #111; border: 1px solid #333;
         border-radius: 4px; color: #f1f1f1; font-family: 'Courier New', monospace;
-        font-size: 16px; outline: none;
+        font-size: ${compactLayout ? '15px' : '16px'}; outline: none;
       `;
-      input.onfocus = () => input.style.borderColor = '#f1f1f1';
-      input.onblur = () => input.style.borderColor = '#333';
       group.appendChild(lbl);
       group.appendChild(input);
       return group;
@@ -165,12 +149,15 @@ export class LobbyUI {
     form.appendChild(makePlayerField(2, 'p2name', 'Hal', true));
     form.appendChild(makePlayerField(3, 'p3name', 'Nick', true));
     form.appendChild(makePlayerField(4, 'p4name', 'Wei', true));
-    form.appendChild(makeField('LAPS [1-9]', 'laps', String(GAME_CONFIG.TOTAL_LAPS), 'number'));
-    form.appendChild(makeField(`WAGER (sats) [${GAME_CONFIG.MIN_WAGER}-${GAME_CONFIG.MAX_WAGER}]`, 'wager', '1000', 'number'));
+    const raceSettingsRow = document.createElement('div');
+    raceSettingsRow.style.cssText = `display:grid;grid-template-columns:repeat(auto-fit,minmax(${compactLayout ? '150px' : '180px'},1fr));gap:${compactLayout ? '8px' : '10px'};`;
+    raceSettingsRow.appendChild(makeField('LAPS [1-9]', 'laps', String(GAME_CONFIG.TOTAL_LAPS), 'number'));
+    raceSettingsRow.appendChild(makeField(`WAGER (sats) [${GAME_CONFIG.MIN_WAGER}-${GAME_CONFIG.MAX_WAGER}]`, 'wager', '1000', 'number'));
+    form.appendChild(raceSettingsRow);
     const trackSelect = document.createElement('select');
     trackSelect.id = 'route_id';
     trackSelect.style.cssText = `
-      width: 100%; padding: 10px; background: #111; border: 1px solid #333;
+      width: 100%; padding: ${compactLayout ? '8px' : '10px'}; background: #111; border: 1px solid #333;
       border-radius: 4px; color: #f1f1f1; font-family: 'Courier New', monospace;
       font-size: 14px; outline: none;
     `;
@@ -181,13 +168,12 @@ export class LobbyUI {
       trackSelect.appendChild(opt);
     }
     const trackWrap = document.createElement('div');
-    trackWrap.style.cssText = 'margin-bottom: 16px;';
+    trackWrap.style.cssText = 'margin-bottom: 14px;';
     const trackLabel = document.createElement('label');
     trackLabel.textContent = 'ROUTE';
-    trackLabel.style.cssText = 'display: block; margin-bottom: 4px; font-size: 12px; color: #8a8a8a;';
+    trackLabel.style.cssText = 'display: block; margin-bottom: 6px; font-size: 12px; color: #8a8a8a;';
     trackWrap.appendChild(trackLabel);
     trackWrap.appendChild(trackSelect);
-    form.appendChild(trackWrap);
     const modeSelect = document.createElement('select');
     modeSelect.id = 'game_mode';
     modeSelect.style.cssText = trackSelect.style.cssText;
@@ -196,33 +182,25 @@ export class LobbyUI {
       <option value="derby">DERBY MODE</option>
     `;
     const modeWrap = document.createElement('div');
-    modeWrap.style.cssText = 'margin-bottom: 16px;';
+    modeWrap.style.cssText = 'margin-bottom: 14px;';
     const modeLabel = document.createElement('label');
     modeLabel.textContent = 'GAME MODE';
-    modeLabel.style.cssText = 'display: block; margin-bottom: 4px; font-size: 12px; color: #8a8a8a;';
+    modeLabel.style.cssText = 'display: block; margin-bottom: 6px; font-size: 12px; color: #8a8a8a;';
     modeWrap.appendChild(modeLabel);
     modeWrap.appendChild(modeSelect);
     form.appendChild(modeWrap);
+    form.appendChild(trackWrap);
 
     // Race button
     const raceBtn = document.createElement('button');
     raceBtn.textContent = 'START CHAIN DUEL';
     raceBtn.style.cssText = `
-      width: 100%; padding: 14px; margin-top: 8px;
+      width: 100%; padding: ${compactLayout ? '11px' : '14px'}; margin-top: ${compactLayout ? '6px' : '8px'};
       background: linear-gradient(135deg, #efefef, #cfcfcf);
       border: none; border-radius: 4px; color: #000; font-weight: bold;
-      font-family: 'Courier New', monospace; font-size: 18px;
+      font-family: 'Courier New', monospace; font-size: ${compactLayout ? '16px' : '18px'};
       cursor: pointer; letter-spacing: 2px;
-      transition: transform 0.1s, box-shadow 0.2s;
     `;
-    raceBtn.onmouseenter = () => {
-      raceBtn.style.transform = 'scale(1.02)';
-      raceBtn.style.boxShadow = '0 0 16px rgba(255,255,255,0.35)';
-    };
-    raceBtn.onmouseleave = () => {
-      raceBtn.style.transform = 'scale(1)';
-      raceBtn.style.boxShadow = 'none';
-    };
     raceBtn.onclick = () => this.handleStart(false);
     form.appendChild(raceBtn);
 
@@ -230,46 +208,37 @@ export class LobbyUI {
     const practiceBtn = document.createElement('button');
     practiceBtn.textContent = 'PRACTICE MODE (no sats)';
     practiceBtn.style.cssText = `
-      width: 100%; padding: 10px; margin-top: 12px;
+      width: 100%; padding: ${compactLayout ? '8px' : '10px'}; margin-top: ${compactLayout ? '8px' : '12px'};
       background: transparent; border: 1px solid #333;
       border-radius: 4px; color: #666; font-family: 'Courier New', monospace;
-      font-size: 13px; cursor: pointer; transition: border-color 0.2s, color 0.2s;
+      font-size: 13px; cursor: pointer;
     `;
-    practiceBtn.onmouseenter = () => {
-      practiceBtn.style.borderColor = '#d8d8d8';
-      practiceBtn.style.color = '#d8d8d8';
-    };
-    practiceBtn.onmouseleave = () => {
-      practiceBtn.style.borderColor = '#333';
-      practiceBtn.style.color = '#666';
-    };
     practiceBtn.onclick = () => this.handleStart(true);
     form.appendChild(practiceBtn);
 
     const watchAiBtn = document.createElement('button');
     watchAiBtn.textContent = 'WATCH AI MATCH (LOCAL)';
     watchAiBtn.style.cssText = `
-      width: 100%; padding: 10px; margin-top: 8px;
+      width: 100%; padding: ${compactLayout ? '8px' : '10px'}; margin-top: 8px;
       background: transparent; border: 1px solid #2f2f2f;
       border-radius: 4px; color: #a9a9a9; font-family: 'Courier New', monospace;
-      font-size: 12px; cursor: pointer; transition: border-color 0.2s, color 0.2s;
+      font-size: 12px; cursor: pointer;
     `;
-    watchAiBtn.onmouseenter = () => {
-      watchAiBtn.style.borderColor = '#d8d8d8';
-      watchAiBtn.style.color = '#d8d8d8';
-    };
-    watchAiBtn.onmouseleave = () => {
-      watchAiBtn.style.borderColor = '#2f2f2f';
-      watchAiBtn.style.color = '#a9a9a9';
-    };
     watchAiBtn.onclick = () => this.startAiOnlyLocalWatch();
     form.appendChild(watchAiBtn);
 
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'BACK';
+    backBtn.style.cssText = this.backBtnCss();
+    backBtn.onclick = () => this.onBackToMode();
+    form.appendChild(backBtn);
+
     // Controls info
-    const controls = document.createElement('div');
-    controls.style.cssText = 'margin-top: 20px; font-size: 11px; color: #555; line-height: 1.6;';
+    const controls = document.createElement('details');
+    controls.open = !compactLayout;
+    controls.style.cssText = `margin-top: ${compactLayout ? '10px' : '16px'}; font-size: 11px; color: #686868; line-height: 1.55;`;
     controls.innerHTML = `
-      <div style="color:#f1f1f1;margin-bottom:4px">CONTROLS</div>
+      <summary style="cursor:pointer; color:#cfcfcf; font-weight:600; letter-spacing:0.4px; margin-bottom:6px;">CONTROLS</summary>
       <div>P1: WASD + SPACE (item) + L-SHIFT (drift) + Q (look) + E (sacrifice boost)</div>
       <div>P2: ARROWS + ENTER (item) + NUM0 (drift) + R-SHIFT (look) + NUM . (sacrifice)</div>
       <div>P3: IJKL + O (item) + P (drift) + U (look) + Y (sacrifice boost)</div>
@@ -279,17 +248,55 @@ export class LobbyUI {
 
     wrapper.appendChild(form);
 
-    // CSS animation
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.82; }
-      }
-    `;
-    wrapper.appendChild(style);
-
+    this.decorateInteractiveElements(form);
     this.container.appendChild(wrapper);
+  }
+
+  private decorateInteractiveElements(root: HTMLElement) {
+    const fields = root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select');
+    for (const field of fields) {
+      field.style.transition = 'border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease';
+      field.style.fontFamily = UI_FONT_FAMILY;
+      const idleBorder = field.style.borderColor || '#333';
+      const hoverBorder = '#5a5a5a';
+      const focusBorder = '#e9e9e9';
+      field.addEventListener('mouseenter', () => {
+        if (document.activeElement !== field && !field.disabled) field.style.borderColor = hoverBorder;
+      });
+      field.addEventListener('mouseleave', () => {
+        if (document.activeElement !== field) field.style.borderColor = idleBorder;
+      });
+      field.addEventListener('focus', () => {
+        field.style.borderColor = focusBorder;
+        field.style.boxShadow = '0 0 0 2px rgba(255,255,255,0.15)';
+      });
+      field.addEventListener('blur', () => {
+        field.style.borderColor = idleBorder;
+        field.style.boxShadow = 'none';
+      });
+    }
+
+    const buttons = root.querySelectorAll<HTMLButtonElement>('button');
+    for (const button of buttons) {
+      button.style.transition = 'transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease';
+      button.style.fontFamily = UI_FONT_FAMILY;
+      button.addEventListener('mouseenter', () => {
+        if (button.disabled) return;
+        button.style.transform = 'translateY(-1px)';
+        button.style.boxShadow = '0 6px 18px rgba(255,255,255,0.12)';
+      });
+      button.addEventListener('mouseleave', () => {
+        button.style.transform = 'translateY(0)';
+        button.style.boxShadow = 'none';
+      });
+      button.addEventListener('focus', () => {
+        if (button.disabled) return;
+        button.style.boxShadow = '0 0 0 2px rgba(255,255,255,0.18)';
+      });
+      button.addEventListener('blur', () => {
+        button.style.boxShadow = 'none';
+      });
+    }
   }
 
   private handleStart(skipPayment: boolean) {
@@ -323,6 +330,22 @@ export class LobbyUI {
     const modeRaw = (document.getElementById('game_mode') as HTMLSelectElement)?.value;
     const mode: GameMode = modeRaw === 'derby' ? 'derby' : 'classic';
     this.onStart(names, isAI, chainClasses, GAME_CONFIG.MIN_WAGER, clampedLaps, true, routeId, mode);
+  }
+
+  private backBtnCss() {
+    return `
+      width: 100%;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: 1px solid #2f2f2f;
+      background: #090909;
+      color: #9e9e9e;
+      font-family: ${UI_FONT_FAMILY};
+      font-size: 12px;
+      letter-spacing: 0.8px;
+    `;
   }
 
   public showRouteEditor() {

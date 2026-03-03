@@ -19,6 +19,7 @@ const SPONSOR_LOGO_IMPORTS = import.meta.glob('./assets/sponsors/*.{png,jpg,jpeg
 }) as Record<string, string>;
 
 const SPONSOR_LOGO_URLS = Object.values(SPONSOR_LOGO_IMPORTS);
+const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
 
 interface SponsorPreviewRow {
   sourcePath: string;
@@ -116,7 +117,7 @@ class ChainDuel3DApp {
 
   constructor() {
     this.container = document.getElementById('app')!;
-    this.lobbyUI = new LobbyUI(this.container, this.onStartGame.bind(this));
+    this.lobbyUI = new LobbyUI(this.container, this.showModeMenu.bind(this), this.onStartGame.bind(this));
     this.onlineLobbyUI = new OnlineLobbyUI(this.container);
     this.paymentUI = new PaymentUI(this.container);
     this.resultUI = new ResultUI(this.container);
@@ -143,22 +144,46 @@ class ChainDuel3DApp {
   private showModeMenu() {
     this.state = 'mode';
     this.container.innerHTML = '';
+    const compactLayout = window.innerHeight < 860;
     const wrap = document.createElement('div');
     wrap.style.cssText = `
-      width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+      width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:${compactLayout ? 'flex-start' : 'center'};
       background:radial-gradient(circle at center,#080808 0%,#000 70%);
-      color:#f0f0f0;font-family:'Courier New', monospace;
+      color:#f0f0f0;font-family:${UI_FONT_FAMILY}; overflow:auto;
+      padding:${compactLayout ? '10px 10px 14px' : '18px 14px 22px'}; box-sizing:border-box;
     `;
+    const hero = document.createElement('div');
+    hero.style.cssText = `width:min(900px,96vw);margin-bottom:${compactLayout ? '8px' : '12px'};`;
+    wrap.appendChild(hero);
     const card = document.createElement('div');
     card.style.cssText = `
       width:min(520px,92vw);background:#090909;border:1px solid #2b2b2b;border-radius:10px;
-      padding:24px;box-shadow:0 0 24px rgba(255,255,255,0.08);
+      padding:${compactLayout ? '16px' : '24px'};box-shadow:0 0 24px rgba(255,255,255,0.08);
     `;
     wrap.appendChild(card);
-    const title = document.createElement('div');
+    const title = document.createElement('h1');
     title.textContent = 'CHAINDUEL3D';
-    title.style.cssText = 'font-size:40px;letter-spacing:6px;color:#fff;text-align:center;margin-bottom:16px;';
-    card.appendChild(title);
+    title.style.cssText = `
+      font-size: clamp(42px, 9vw, 72px);
+      margin: 0 0 6px 0;
+      letter-spacing: clamp(5px, 1.4vw, 12px);
+      color: #fff;
+      text-align: center;
+      text-shadow: 0 0 28px rgba(255,255,255,0.28), 0 0 70px rgba(255,255,255,0.08);
+      animation: pulse 2s ease-in-out infinite;
+    `;
+    hero.appendChild(title);
+    const subtitle = document.createElement('div');
+    subtitle.textContent = 'ANATOMY OF BITCOIN CHAINS';
+    subtitle.style.cssText = `
+      font-size: clamp(11px, 1.6vw, 14px);
+      color: #9f9f9f;
+      margin-bottom: ${compactLayout ? '10px' : '14px'};
+      letter-spacing: clamp(2px, 0.6vw, 6px);
+      text-shadow: 0 0 18px rgba(255,255,255,0.1);
+      text-align: center;
+    `;
+    hero.appendChild(subtitle);
     const localBtn = document.createElement('button');
     localBtn.textContent = 'LOCAL';
     localBtn.style.cssText = this.modeBtnCss(true);
@@ -174,9 +199,20 @@ class ChainDuel3DApp {
     adminBtn.style.cssText = this.modeBtnCss(false);
     adminBtn.onclick = () => this.showAdminMenu();
     card.appendChild(adminBtn);
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.82; }
+      }
+    `;
+    wrap.appendChild(style);
+    this.decorateInteractiveElements(card);
     this.container.appendChild(wrap);
     if (this.onlineInviteCodeFromUrl) {
-      setTimeout(() => this.showOnlineEntry(this.onlineInviteCodeFromUrl!), 50);
+      const invite = this.onlineInviteCodeFromUrl;
+      this.onlineInviteCodeFromUrl = null;
+      setTimeout(() => this.showOnlineEntry(invite), 50);
     }
   }
 
@@ -186,7 +222,8 @@ class ChainDuel3DApp {
       border:1px solid ${primary ? '#efefef' : '#2f2f2f'};
       background:${primary ? 'linear-gradient(135deg,#efefef,#cdcdcd)' : '#101010'};
       color:${primary ? '#000' : '#ddd'};
-      font-size:18px;letter-spacing:1px;font-family:'Courier New', monospace;
+      font-size:18px;letter-spacing:1px;font-family:${UI_FONT_FAMILY};
+      transition:transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease;
     `;
   }
 
@@ -200,11 +237,18 @@ class ChainDuel3DApp {
     this.state = 'online_entry';
     this.onlineLobbyUI.showEntry({
       onBackToMode: () => this.showModeMenu(),
-      onCreate: async (name, laps, aiCount, spectatorHost, routeId, mode) => {
+      onCreate: async (name) => {
         try {
-          this.selectedRouteId = routeId || 'default';
-          this.gameMode = mode ?? 'classic';
-          const created = await this.roomClient.createRoom(name, laps, aiCount, spectatorHost, this.selectedRouteId, this.gameMode);
+          this.selectedRouteId = 'default';
+          this.gameMode = 'classic';
+          const created = await this.roomClient.createRoom(
+            name,
+            GAME_CONFIG.TOTAL_LAPS,
+            2,
+            false,
+            this.selectedRouteId,
+            this.gameMode,
+          );
           this.onlineMemberId = created.memberId;
           this.showOnlineRoom(created.room);
         } catch (err: any) {
@@ -225,7 +269,7 @@ class ChainDuel3DApp {
           this.onlineLobbyUI.setStatus(err?.message ?? 'Failed to join room');
         }
       },
-    });
+    }, prefillCode);
   }
 
   private showOnlineRoom(room: RoomState) {
@@ -238,11 +282,14 @@ class ChainDuel3DApp {
         this.roomClient.disconnect();
         this.onlineRoom = null;
         this.onlineMemberId = null;
+        this.clearInviteQueryParam();
         this.showModeMenu();
       },
       onPatchSettings: s => this.roomClient.patchSettings(s),
       onStart: () => this.roomClient.startRace(null, room.settings.routeId),
       onSendChat: txt => this.roomClient.sendChat(txt),
+      onKick: memberId => this.roomClient.kickMember(memberId),
+      onSetReady: ready => this.roomClient.setReady(ready),
     });
   }
 
@@ -373,13 +420,8 @@ class ChainDuel3DApp {
       this.game.dispose();
       this.game = null;
     }
-    if (this.onlineRoom) {
-      this.roomClient.leave();
-      this.roomClient.disconnect();
-      this.onlineRoom = null;
-      this.onlineMemberId = null;
-      this.latestRoomSnapshot = null;
-    }
+    const isOnlineFlow = !!this.onlineRoom && !!this.onlineMemberId;
+    this.latestRoomSnapshot = null;
 
     const winnerId = top3Ids[0] ?? 0;
     const winnerName = this.playerNames[winnerId];
@@ -396,7 +438,14 @@ class ChainDuel3DApp {
         });
         if (res.ok) {
           const data = await res.json();
-          this.resultUI.show(winnerName, top3Names, data.amount, data.lnurl, () => this.showModeMenu(), this.gameMode);
+          this.resultUI.show(
+            winnerName,
+            top3Names,
+            data.amount,
+            data.lnurl,
+            () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
+            this.gameMode,
+          );
           return;
         }
       } catch { /* fall through to simple result */ }
@@ -407,9 +456,24 @@ class ChainDuel3DApp {
       top3Names,
       this.wagerAmount * 2 * (1 - GAME_CONFIG.REVENUE_SPLIT_PERCENT / 100),
       null,
-      () => this.showModeMenu(),
+      () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
       this.gameMode,
     );
+  }
+
+  private async returnOnlineToLobby() {
+    if (!this.onlineRoom || !this.onlineMemberId) {
+      this.showModeMenu();
+      return;
+    }
+    try {
+      const res = await this.roomClient.rematch();
+      this.onlineRoom = res.room;
+      this.showOnlineRoom(res.room);
+    } catch (err: any) {
+      this.showOnlineRoom(this.onlineRoom);
+      this.onlineLobbyUI.setStatus(err?.message ?? 'Waiting for host to reopen lobby');
+    }
   }
 
   private async refreshRoutes() {
@@ -443,21 +507,24 @@ class ChainDuel3DApp {
   private showAdminMenu() {
     this.state = 'admin';
     this.container.innerHTML = '';
+    const compactLayout = window.innerHeight < 900;
+    const narrowLayout = window.innerWidth < 700;
     const wrap = document.createElement('div');
     wrap.style.cssText = `
-      width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+      width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:${compactLayout ? 'flex-start' : 'center'};
       background:radial-gradient(circle at center,#080808 0%,#000 70%);
-      color:#f0f0f0;font-family:'Courier New', monospace;
+      color:#f0f0f0;font-family:${UI_FONT_FAMILY}; overflow:auto;
+      padding:${compactLayout ? '10px 10px 14px' : '18px 14px 22px'}; box-sizing:border-box;
     `;
     const card = document.createElement('div');
     card.style.cssText = `
       width:min(680px,94vw);background:#090909;border:1px solid #2b2b2b;border-radius:10px;
-      padding:20px;box-shadow:0 0 24px rgba(255,255,255,0.08);
+      padding:${compactLayout ? '14px' : '22px'};box-shadow:0 0 24px rgba(255,255,255,0.08);
     `;
     wrap.appendChild(card);
     const title = document.createElement('div');
     title.textContent = 'ADMIN ROUTE CATALOG';
-    title.style.cssText = 'font-size:24px;letter-spacing:2px;color:#fff;margin-bottom:12px;';
+    title.style.cssText = `font-size:clamp(18px,4vw,24px);letter-spacing:2px;color:#fff;margin-bottom:${compactLayout ? '8px' : '12px'};`;
     card.appendChild(title);
 
     const secretInput = document.createElement('input');
@@ -474,12 +541,26 @@ class ChainDuel3DApp {
     const status = document.createElement('div');
     status.style.cssText = 'min-height:18px;color:#9b9b9b;font-size:12px;margin:8px 0 12px;';
     card.appendChild(status);
+    const sponsorDetails = document.createElement('details');
+    sponsorDetails.style.cssText = 'margin-bottom:12px;border:1px solid #2f2f2f;border-radius:6px;background:#0d0d0d;';
+    const sponsorSummary = document.createElement('summary');
+    sponsorSummary.innerHTML = '<span id="sponsor-chevron" style="display:inline-block;width:14px;color:#9f9f9f;">▸</span>SPONSOR PREVIEW / DEBUG';
+    sponsorSummary.style.cssText = `
+      cursor:pointer; list-style:none; padding:10px; font-size:12px; color:#d9d9d9;
+      letter-spacing:0.4px; border-bottom:1px solid #1f1f1f;
+    `;
+    sponsorDetails.addEventListener('toggle', () => {
+      const chev = sponsorSummary.querySelector('#sponsor-chevron');
+      if (chev) chev.textContent = sponsorDetails.open ? '▾' : '▸';
+    });
+    sponsorDetails.appendChild(sponsorSummary);
     const sponsorPanel = document.createElement('div');
     sponsorPanel.style.cssText = `
-      margin-bottom:12px;padding:10px;border:1px solid #2f2f2f;border-radius:6px;background:#0d0d0d;
+      padding:10px;
       font-size:11px;line-height:1.35;color:#d9d9d9;
     `;
-    card.appendChild(sponsorPanel);
+    sponsorDetails.appendChild(sponsorPanel);
+    card.appendChild(sponsorDetails);
     this.renderSponsorPreviewPanel(sponsorPanel);
     const getAdminSecret = () => secretInput.value.trim();
 
@@ -499,15 +580,10 @@ class ChainDuel3DApp {
     card.appendChild(nameInput);
 
     const row = document.createElement('div');
-    row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;';
-    const openParamBtn = document.createElement('button');
-    openParamBtn.textContent = 'OPEN PARAM EDITOR';
-    openParamBtn.style.cssText = this.modeBtnCss(false);
-    openParamBtn.onclick = () => this.lobbyUI.showRouteEditor();
-    row.appendChild(openParamBtn);
+    row.style.cssText = 'display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px;';
     const openBuilderBtn = document.createElement('button');
     openBuilderBtn.textContent = 'OPEN GRAPHICAL BUILDER';
-    openBuilderBtn.style.cssText = this.modeBtnCss(false);
+    openBuilderBtn.style.cssText = this.modeBtnCss(true);
     openBuilderBtn.onclick = () => this.lobbyUI.showGraphicalRouteBuilder();
     row.appendChild(openBuilderBtn);
     card.appendChild(row);
@@ -648,11 +724,76 @@ class ChainDuel3DApp {
 
     const backBtn = document.createElement('button');
     backBtn.textContent = 'BACK';
-    backBtn.style.cssText = this.modeBtnCss(false);
+    backBtn.style.cssText = this.backBtnCss();
     backBtn.onclick = () => this.showModeMenu();
     card.appendChild(backBtn);
 
+    this.decorateInteractiveElements(card);
     this.container.appendChild(wrap);
+  }
+
+  private decorateInteractiveElements(root: HTMLElement) {
+    const fields = root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select');
+    for (const field of fields) {
+      field.style.transition = 'border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease';
+      field.style.fontFamily = UI_FONT_FAMILY;
+      const idleBorder = field.style.borderColor || '#333';
+      const hoverBorder = '#5a5a5a';
+      const focusBorder = '#e9e9e9';
+      field.addEventListener('mouseenter', () => {
+        if (document.activeElement !== field && !field.disabled) field.style.borderColor = hoverBorder;
+      });
+      field.addEventListener('mouseleave', () => {
+        if (document.activeElement !== field) field.style.borderColor = idleBorder;
+      });
+      field.addEventListener('focus', () => {
+        if (field.disabled) return;
+        field.style.borderColor = focusBorder;
+        field.style.boxShadow = '0 0 0 2px rgba(255,255,255,0.15)';
+      });
+      field.addEventListener('blur', () => {
+        field.style.borderColor = idleBorder;
+        field.style.boxShadow = 'none';
+      });
+    }
+
+    const buttons = root.querySelectorAll<HTMLButtonElement>('button');
+    for (const button of buttons) {
+      button.style.transition = 'transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, opacity 0.2s ease';
+      button.style.fontFamily = UI_FONT_FAMILY;
+      button.addEventListener('mouseenter', () => {
+        if (button.disabled) return;
+        button.style.transform = 'translateY(-1px)';
+        button.style.boxShadow = '0 6px 18px rgba(255,255,255,0.12)';
+      });
+      button.addEventListener('mouseleave', () => {
+        button.style.transform = 'translateY(0)';
+        button.style.boxShadow = 'none';
+      });
+      button.addEventListener('focus', () => {
+        if (button.disabled) return;
+        button.style.boxShadow = '0 0 0 2px rgba(255,255,255,0.18)';
+      });
+      button.addEventListener('blur', () => {
+        button.style.boxShadow = 'none';
+      });
+    }
+  }
+
+  private backBtnCss(): string {
+    return `
+      width:100%;
+      margin-top:8px;
+      padding:10px 12px;
+      border-radius:4px;
+      cursor:pointer;
+      border:1px solid #2f2f2f;
+      background:#090909;
+      color:#9e9e9e;
+      font-family:${UI_FONT_FAMILY};
+      font-size:12px;
+      letter-spacing:0.8px;
+    `;
   }
 
   private async ensureSponsorPreviewRows(): Promise<SponsorPreviewRow[]> {
@@ -727,6 +868,20 @@ class ChainDuel3DApp {
   }
 
   private onRoomState(room: RoomState) {
+    if (this.onlineMemberId && !room.members.some(m => m.memberId === this.onlineMemberId)) {
+      if (this.game) {
+        this.game.dispose();
+        this.game = null;
+      }
+      this.roomClient.disconnect();
+      this.onlineRoom = null;
+      this.onlineMemberId = null;
+      this.latestRoomSnapshot = null;
+      this.clearInviteQueryParam();
+      this.showOnlineEntry();
+      this.onlineLobbyUI.setStatus('You were removed from the lobby.');
+      return;
+    }
     this.onlineRoom = room;
     if (this.game && this.state === 'racing') {
       this.game.setOnlineStandings(room.race?.standings?.placementOrder ?? null);
@@ -752,10 +907,28 @@ class ChainDuel3DApp {
     if (this.state === 'online_entry' && this.onlineMemberId) {
       this.showOnlineRoom(room);
     }
+    if (this.state === 'result' && this.onlineMemberId) {
+      if (room.phase === 'lobby') {
+        this.showOnlineRoom(room);
+      } else if (room.phase === 'countdown' || room.phase === 'racing') {
+        this.startOnlineRace(room);
+      }
+    }
   }
 
   private onRoomChat(msg: ChatMessage) {
     if (this.state === 'online_room') this.onlineLobbyUI.pushChat(msg);
+  }
+
+  private clearInviteQueryParam() {
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has('room')) return;
+      url.searchParams.delete('room');
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // no-op
+    }
   }
 }
 
