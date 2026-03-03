@@ -1,5 +1,5 @@
-import sim from '../../shared/sim';
-import type { SimInput, SimRaceState } from '../../shared/sim';
+import sim from '../../shared/sim.js';
+import type { SimInput, SimRaceState } from '../../shared/sim.js';
 
 const {
   buildSimCheckpoints,

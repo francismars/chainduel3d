@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
-import sim from '../../shared/sim';
-import type { SimInput, SimPlayerRuntimeState, SimRaceEvent, SimRandomState } from '../../shared/sim';
+import sim from '../../shared/sim.js';
+import type { SimInput, SimPlayerRuntimeState, SimRaceEvent, SimRandomState } from '../../shared/sim.js';
 import type { GameMode } from '../../shared/types';
 
 const {
