@@ -99,7 +99,33 @@ SMOKE_BASE_URL=https://3d.chainduel.net SMOKE_ADMIN_SECRET=<admin_secret> npm ru
    - session creates invoices
    - result endpoint returns payout (or safe fallback if LNBits unavailable)
 
-## 7) Monitoring and Alerting
+## 7) Updating an Existing Deployment
+
+When new code is pushed to GitHub, update the VPS with:
+
+```bash
+cd /opt/chainduel3d
+git pull
+docker-compose -f docker-compose.prod.yml down --remove-orphans
+docker-compose -f docker-compose.prod.yml build --no-cache
+NGINX_CONFIG=chainduel3d.conf docker-compose -f docker-compose.prod.yml up -d
+docker-compose -f docker-compose.prod.yml ps
+curl -fsS https://3d.chainduel.net/health
+```
+
+If you hit `KeyError: 'ContainerConfig'` on `docker-compose` v1, run this recovery path:
+
+```bash
+cd /opt/chainduel3d
+docker-compose -f docker-compose.prod.yml down --remove-orphans
+docker rm -f chainduel3d_server_1 chainduel3d_client_1 chainduel3d_edge_1 2>/dev/null || true
+docker ps -a --format '{{.Names}}' | grep chainduel3d_ | xargs -r docker rm -f
+NGINX_CONFIG=chainduel3d.conf docker-compose -f docker-compose.prod.yml up -d
+```
+
+Recommendation: migrate VPS to Docker Compose v2 (`docker compose`) to avoid this v1 recreate bug class permanently.
+
+## 8) Monitoring and Alerting
 
 - External uptime check: `https://3d.chainduel.net/health` every 1 minute.
 - Alert on:
@@ -112,7 +138,7 @@ docker compose -f docker-compose.prod.yml ps
 docker compose -f docker-compose.prod.yml logs --tail=200 edge server client
 ```
 
-## 8) Log Rotation
+## 9) Log Rotation
 
 Configure Docker daemon log rotation on VM (`/etc/docker/daemon.json`):
 
@@ -128,7 +154,7 @@ Configure Docker daemon log rotation on VM (`/etc/docker/daemon.json`):
 
 Then restart Docker daemon.
 
-## 9) Rollback
+## 10) Rollback
 
 Redeploy previous known-good image tag:
 
@@ -143,7 +169,7 @@ Validate with:
 curl -fsS https://3d.chainduel.net/health
 ```
 
-## 10) Data and Backup Notes
+## 11) Data and Backup Notes
 
 - Route catalog is persisted on server container filesystem by default.
 - For persistent backups, mount `server/data` as a host volume and include it in nightly VM backups.
