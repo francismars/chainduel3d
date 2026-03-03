@@ -23,6 +23,7 @@ COPY shared/package.json shared/package.json
 RUN npm ci --omit=dev --workspace=server --include-workspace-root=false
 
 COPY --from=build /app/server/dist ./server/dist
+COPY --from=build /app/server/data ./server/dist/server/data
 
 EXPOSE 3000
 CMD ["node", "--experimental-specifier-resolution=node", "server/dist/server/src/server.js"]
