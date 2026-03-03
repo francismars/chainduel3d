@@ -10,7 +10,7 @@ import { EscrowManager } from './escrow.js';
 import { RoomManager } from './room.js';
 import { RaceAuthority } from './race-authority.js';
 import { RouteCatalog } from './routes.js';
-import type { ChainClass, GameMode, RoomClientMessage, RoomServerMessage, StartRoomRequest, RouteCustomLayout } from '../../shared/types';
+import type { ChainClass, GameMode, RoomClientMessage, RoomServerMessage, StartRoomRequest, RouteCustomLayout, KickRoomMemberRequest, SetReadyRequest } from '../../shared/types';
 
 type JoinRoomRequest = { code: string; name: string };
 
@@ -232,6 +232,58 @@ app.post('/api/rooms/:roomId/start', (req, res) => {
   }
 });
 
+app.post('/api/rooms/:roomId/kick', (req, res) => {
+  try {
+    const body = req.body as KickRoomMemberRequest;
+    if (!body?.targetMemberId) {
+      res.status(400).json({ error: 'Missing target member' });
+      return;
+    }
+    const room = rooms.kickMember(
+      req.params.roomId,
+      body.memberId,
+      body.memberToken,
+      body.targetMemberId,
+    );
+    evictRoomMemberConnections(room.roomId, body.targetMemberId, 'You were removed by the host');
+    broadcastRoomState(room.roomId);
+    res.json({ room });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Kick failed' });
+  }
+});
+
+app.post('/api/rooms/:roomId/ready', (req, res) => {
+  try {
+    const body = req.body as SetReadyRequest;
+    const room = rooms.setReady(
+      req.params.roomId,
+      body.memberId,
+      body.memberToken,
+      !!body.ready,
+    );
+    broadcastRoomState(room.roomId);
+    res.json({ room });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Ready update failed' });
+  }
+});
+
+app.post('/api/rooms/:roomId/rematch', (req, res) => {
+  try {
+    const body = req.body as StartRoomRequest;
+    const room = rooms.rematch(
+      req.params.roomId,
+      body.memberId,
+      body.memberToken,
+    );
+    broadcastRoomState(room.roomId);
+    res.json({ room });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Rematch failed' });
+  }
+});
+
 app.get('/api/routes', (_req, res) => {
   res.json({ routes: routes.list() });
 });
@@ -386,6 +438,13 @@ const sessionBroadcastInterval = setInterval(() => {
   });
 }, 2000);
 
+const lobbyDisconnectCleanupInterval = setInterval(() => {
+  const changedRoomIds = rooms.pruneDisconnectedLobbyMembers(rooms.disconnectGraceMs);
+  for (const roomId of changedRoomIds) {
+    broadcastRoomState(roomId);
+  }
+}, 5000);
+
 function send(ws: WebSocket, payload: RoomServerMessage) {
   if (ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify(payload));
@@ -403,6 +462,21 @@ function broadcastRoomState(roomId: string) {
   const room = rooms.getState(roomId);
   if (!room) return;
   broadcastToRoom(roomId, { type: 'room_state', room });
+}
+
+function evictRoomMemberConnections(roomId: string, memberId: string, message: string) {
+  wss.clients.forEach(client => {
+    const sub = wsRoom.get(client);
+    if (!sub) return;
+    if (sub.roomId !== roomId || sub.memberId !== memberId) return;
+    send(client, { type: 'error', message });
+    wsRoom.delete(client);
+    try {
+      client.close(4001, 'kicked');
+    } catch {
+      // ignore close errors
+    }
+  });
 }
 
 function isAdminAuthorized(req: express.Request): boolean {
@@ -439,6 +513,7 @@ server.listen(PORT, () => {
 function shutdown(signal: string) {
   console.log(`[shutdown] Received ${signal}, draining server...`);
   clearInterval(sessionBroadcastInterval);
+  clearInterval(lobbyDisconnectCleanupInterval);
   raceAuthority.stop();
   wss.clients.forEach((client) => {
     try {

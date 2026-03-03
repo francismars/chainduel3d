@@ -1,5 +1,6 @@
 import type { GameMode } from 'shared/types';
 import QRCode from 'qrcode';
+const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
 
 export class ResultUI {
   private container: HTMLElement;
@@ -17,46 +18,58 @@ export class ResultUI {
     mode: GameMode = 'classic',
   ) {
     this.container.innerHTML = '';
+    const compactLayout = window.innerHeight < 860;
 
     const wrapper = document.createElement('div');
     wrapper.style.cssText = `
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      width: 100%; height: 100%; background: #0a0a0a;
-      font-family: 'Courier New', monospace; color: #f7931a;
+      display: flex; flex-direction: column; align-items: center; justify-content: ${compactLayout ? 'flex-start' : 'center'};
+      width: 100%; height: 100%; background: radial-gradient(circle at center,#080808 0%,#000 70%);
+      font-family: ${UI_FONT_FAMILY}; color: #e9e9e9;
+      overflow: auto; padding: ${compactLayout ? '10px 10px 16px' : '18px 14px 24px'}; box-sizing: border-box;
     `;
+
+    const card = document.createElement('div');
+    card.style.cssText = `
+      width:min(640px,94vw);background:#090909;border:1px solid #2b2b2b;border-radius:10px;
+      padding:${compactLayout ? '16px' : '24px'};box-shadow:0 0 26px rgba(255,255,255,0.08);
+      display:flex;flex-direction:column;align-items:center;
+    `;
+    wrapper.appendChild(card);
 
     // Trophy / winner announcement
     const trophy = document.createElement('div');
-    trophy.textContent = '₿';
+    trophy.textContent = mode === 'derby' ? '◆' : '₿';
     trophy.style.cssText = `
-      font-size: 100px; margin-bottom: 10px;
-      text-shadow: 0 0 60px rgba(247,147,26,0.8);
-      animation: winPulse 1s ease-in-out infinite;
+      font-size: clamp(52px, 11vw, 82px); margin-bottom: 8px; color:#efefef;
+      text-shadow: 0 0 36px rgba(255,255,255,0.32);
+      animation: winPulse 1.6s ease-in-out infinite;
     `;
-    wrapper.appendChild(trophy);
+    card.appendChild(trophy);
 
     const winText = document.createElement('h1');
     winText.textContent = mode === 'derby'
       ? `${winnerName.toUpperCase()} SURVIVES!`
       : `${winnerName.toUpperCase()} WINS!`;
     winText.style.cssText = `
-      font-size: 48px; margin: 0 0 16px 0; color: #fff;
-      text-shadow: 0 0 30px rgba(247,147,26,0.5);
+      font-size: clamp(24px, 6vw, 44px); margin: 0 0 ${compactLayout ? '10px' : '14px'} 0; color: #fff;
+      text-shadow: 0 0 24px rgba(255,255,255,0.15);
+      text-align: center;
+      letter-spacing: 1.2px;
     `;
-    wrapper.appendChild(winText);
+    card.appendChild(winText);
 
     const amountText = document.createElement('div');
     amountText.textContent = `${Math.floor(amount).toLocaleString()} sats`;
-    amountText.style.cssText = 'font-size: 28px; color: #00ff88; margin-bottom: 30px;';
-    wrapper.appendChild(amountText);
+    amountText.style.cssText = `font-size: clamp(18px, 4.8vw, 26px); color: #d7ffd7; margin-bottom: ${compactLayout ? '14px' : '22px'};`;
+    card.appendChild(amountText);
 
     if (top3Names.length > 0) {
       const podium = document.createElement('div');
       podium.style.cssText = `
-        margin-bottom: 18px; padding: 10px 16px;
+        margin-bottom: ${compactLayout ? '12px' : '18px'}; padding: 10px 16px;
         border: 1px solid #2c2c2c; border-radius: 6px;
-        background: rgba(15,15,15,0.85); color: #dcdcdc;
-        min-width: 320px; text-align: left; font-size: 13px; line-height: 1.8;
+        background: rgba(10,10,10,0.9); color: #dcdcdc;
+        min-width: min(320px, 90vw); text-align: left; font-size: 13px; line-height: 1.8;
       `;
       const p1 = top3Names[0] ?? '---';
       const p2 = top3Names[1] ?? '---';
@@ -67,50 +80,50 @@ export class ResultUI {
         <div>2. ${p2}</div>
         <div>3. ${p3}</div>
       `;
-      wrapper.appendChild(podium);
+      card.appendChild(podium);
     }
 
     // QR code for withdrawal (if lnurl provided)
     if (lnurl) {
       const qrLabel = document.createElement('div');
       qrLabel.textContent = 'SCAN TO WITHDRAW';
-      qrLabel.style.cssText = 'font-size: 14px; color: #888; margin-bottom: 10px;';
-      wrapper.appendChild(qrLabel);
+      qrLabel.style.cssText = 'font-size: 12px; color: #9f9f9f; margin-bottom: 10px; letter-spacing:0.8px;';
+      card.appendChild(qrLabel);
 
       const qrCanvas = document.createElement('canvas');
       try {
         await QRCode.toCanvas(qrCanvas, lnurl, {
           width: 250,
-          color: { dark: '#00ff88', light: '#0a0a0a' },
+          color: { dark: '#f0f0f0', light: '#0a0a0a' },
         });
       } catch { /* skip if QR fails */ }
-      wrapper.appendChild(qrCanvas);
+      card.appendChild(qrCanvas);
 
       const lnurlText = document.createElement('div');
       lnurlText.textContent = lnurl.substring(0, 40) + '...';
       lnurlText.style.cssText = `
-        font-size: 10px; color: #555; margin-top: 8px; cursor: pointer;
+        font-size: 10px; color: #7b7b7b; margin-top: 8px; cursor: pointer;
         max-width: 300px; text-align: center; word-break: break-all;
       `;
       lnurlText.onclick = () => {
         navigator.clipboard.writeText(lnurl);
         lnurlText.textContent = 'Copied!';
       };
-      wrapper.appendChild(lnurlText);
+      card.appendChild(lnurlText);
     }
 
     // Continue button
     const continueBtn = document.createElement('button');
     continueBtn.textContent = mode === 'derby' ? 'DERBY AGAIN' : 'DUEL AGAIN';
     continueBtn.style.cssText = `
-      margin-top: 30px; padding: 14px 40px;
-      background: linear-gradient(135deg, #f7931a, #e67e00);
-      border: none; border-radius: 4px; color: #000; font-weight: bold;
-      font-family: 'Courier New', monospace; font-size: 16px;
-      cursor: pointer; letter-spacing: 2px;
+      margin-top: ${compactLayout ? '16px' : '30px'}; padding: ${compactLayout ? '11px 28px' : '14px 40px'};
+      background: linear-gradient(135deg, #efefef, #cdcdcd);
+      border: 1px solid #efefef; border-radius: 4px; color: #000; font-weight: bold;
+      font-family: ${UI_FONT_FAMILY}; font-size: 16px;
+      cursor: pointer; letter-spacing: 1.8px;
     `;
     continueBtn.onclick = onContinue;
-    wrapper.appendChild(continueBtn);
+    card.appendChild(continueBtn);
 
     const style = document.createElement('style');
     style.textContent = `

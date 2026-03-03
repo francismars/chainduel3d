@@ -122,6 +122,58 @@ export class RoomClient {
     }
   }
 
+  async kickMember(targetMemberId: string) {
+    const id = this.getRequiredIdentity();
+    const res = await fetch(`/api/rooms/${id.roomId}/kick`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: id.memberId,
+        memberToken: id.memberToken,
+        targetMemberId,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to kick member' }));
+      throw new Error(err.error ?? 'Failed to kick member');
+    }
+  }
+
+  async setReady(ready: boolean) {
+    const id = this.getRequiredIdentity();
+    const res = await fetch(`/api/rooms/${id.roomId}/ready`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: id.memberId,
+        memberToken: id.memberToken,
+        ready,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to update ready status' }));
+      throw new Error(err.error ?? 'Failed to update ready status');
+    }
+  }
+
+  async rematch() {
+    const id = this.getRequiredIdentity();
+    const res = await fetch(`/api/rooms/${id.roomId}/rematch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: id.memberId,
+        memberToken: id.memberToken,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to return to lobby' }));
+      throw new Error(err.error ?? 'Failed to return to lobby');
+    }
+    const data = await res.json();
+    return data as { room: RoomState };
+  }
+
   sendChat(text: string) {
     if (!text.trim()) return;
     const id = this.getRequiredIdentity();
