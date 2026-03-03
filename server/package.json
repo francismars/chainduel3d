@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server/src/server.js",
+    "start": "node --experimental-specifier-resolution=node dist/server/src/server.js",
     "test:parity": "tsx src/parity.test.ts",
     "test:smoke": "tsx src/smoke.test.ts"
   },

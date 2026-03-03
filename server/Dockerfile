@@ -25,4 +25,4 @@ RUN npm ci --omit=dev --workspace=server --include-workspace-root=false
 COPY --from=build /app/server/dist ./server/dist
 
 EXPOSE 3000
-CMD ["node", "server/dist/server/src/server.js"]
+CMD ["node", "--experimental-specifier-resolution=node", "server/dist/server/src/server.js"]
