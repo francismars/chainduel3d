@@ -142,6 +142,7 @@ class ChainDuel3DApp {
           this.game.setOnlineSnapshot(snapshot);
         }
       },
+      onMemberPing: (roomId, memberId, pingMs) => this.onMemberPing(roomId, memberId, pingMs),
       onError: msg => this.onlineLobbyUI.setStatus(msg),
     });
     const url = new URL(window.location.href);
@@ -933,6 +934,15 @@ class ChainDuel3DApp {
 
   private onRoomChat(msg: ChatMessage) {
     if (this.state === 'online_room') this.onlineLobbyUI.pushChat(msg);
+  }
+
+  private onMemberPing(roomId: string, memberId: string, pingMs: number) {
+    if (!this.onlineRoom || this.onlineRoom.roomId !== roomId) return;
+    const member = this.onlineRoom.members.find(m => m.memberId === memberId);
+    if (member) member.pingMs = pingMs;
+    if (this.state === 'online_room') {
+      this.onlineLobbyUI.updateMemberPing(memberId, pingMs);
+    }
   }
 
   private clearInviteQueryParam() {

@@ -29,6 +29,8 @@ export class OnlineLobbyUI {
   private startRacePending = false;
   private rosterTimerId: ReturnType<typeof setInterval> | null = null;
   private routes: RouteOption[] = [{ id: 'default', name: 'Genesis Route' }];
+  private lobbyNameDraft: { roomId: string; memberId: string; value: string } | null = null;
+  private pingLabelByMemberId = new Map<string, HTMLElement>();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -112,11 +114,21 @@ export class OnlineLobbyUI {
     this.clearRosterTimer();
     this.room = room;
     this.meId = meId;
+    this.pingLabelByMemberId.clear();
     this.container.innerHTML = '';
     const me = room.members.find(m => m.memberId === meId);
     const isHost = me?.isHost ?? false;
     const meReady = me?.ready ?? false;
     if (room.phase !== 'lobby') this.startRacePending = false;
+    if (
+      this.lobbyNameDraft
+      && (this.lobbyNameDraft.roomId !== room.roomId || this.lobbyNameDraft.memberId !== meId)
+    ) {
+      this.lobbyNameDraft = null;
+    }
+    if (this.lobbyNameDraft && me && this.lobbyNameDraft.value === me.name) {
+      this.lobbyNameDraft = null;
+    }
 
     const wrap = document.createElement('div');
     const compactLayout = window.innerWidth < 980;
@@ -155,8 +167,10 @@ export class OnlineLobbyUI {
     roster.style.cssText = 'font-size:13px;line-height:1.45;margin-bottom:10px;border:1px solid #242424;border-radius:6px;padding:8px;';
     const graceMs = 30_000;
     const renderRoster = () => {
+      this.pingLabelByMemberId.clear();
       roster.innerHTML = '';
-      const sorted = [...room.members].sort((a, b) => a.slotIndex - b.slotIndex);
+      const roomState = this.room ?? room;
+      const sorted = [...roomState.members].sort((a, b) => a.slotIndex - b.slotIndex);
       for (const m of sorted) {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;';
@@ -170,8 +184,19 @@ export class OnlineLobbyUI {
           label.innerHTML = `${slot}: ${m.name}${hostText}${readyText} <span style="color:#f3bf78;animation:offlinePulse 1.2s ease-in-out infinite">[OFFLINE ${seconds}s]</span>`;
         } else {
           const readyText = m.ready ? ' [READY]' : '';
-          const pingText = m.connected && typeof m.pingMs === 'number' ? ` [${Math.round(m.pingMs)}ms]` : '';
-          label.textContent = `${slot}: ${m.name}${hostText}${readyText}${m.connected ? pingText : ' [OFFLINE]'}`;
+          label.textContent = `${slot}: ${m.name}${hostText}${readyText}`;
+          if (m.connected) {
+            const ping = document.createElement('span');
+            ping.textContent = typeof m.pingMs === 'number' ? ` [${Math.round(m.pingMs)}ms]` : '';
+            ping.style.color = '#9f9f9f';
+            label.appendChild(ping);
+            this.pingLabelByMemberId.set(m.memberId, ping);
+          } else {
+            const offline = document.createElement('span');
+            offline.textContent = ' [OFFLINE]';
+            offline.style.color = '#f3bf78';
+            label.appendChild(offline);
+          }
         }
         row.appendChild(label);
         if (isHost && room.phase === 'lobby' && m.memberId !== meId && !m.isHost) {
@@ -203,9 +228,18 @@ export class OnlineLobbyUI {
       nameRow.style.cssText = 'display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:10px;';
       const nameInput = document.createElement('input');
       nameInput.placeholder = 'Your name';
-      nameInput.value = me.name;
+      nameInput.value = this.lobbyNameDraft?.roomId === room.roomId && this.lobbyNameDraft.memberId === meId
+        ? this.lobbyNameDraft.value
+        : me.name;
       nameInput.maxLength = 24;
       nameInput.style.cssText = this.inputCss();
+      nameInput.addEventListener('input', () => {
+        this.lobbyNameDraft = {
+          roomId: room.roomId,
+          memberId: meId,
+          value: nameInput.value,
+        };
+      });
       nameRow.appendChild(nameInput);
       const saveNameBtn = document.createElement('button');
       saveNameBtn.textContent = 'UPDATE NAME';
@@ -222,6 +256,11 @@ export class OnlineLobbyUI {
         }
         try {
           await actions.onSetName(next);
+          this.lobbyNameDraft = {
+            roomId: room.roomId,
+            memberId: meId,
+            value: next,
+          };
           this.setStatus('Name updated');
         } catch (err: any) {
           this.setStatus(err?.message ?? 'Failed to update name');
@@ -426,6 +465,15 @@ export class OnlineLobbyUI {
 
     this.decorateInteractiveElements(wrap);
     this.container.appendChild(wrap);
+  }
+
+  updateMemberPing(memberId: string, pingMs: number) {
+    if (this.room) {
+      const member = this.room.members.find(m => m.memberId === memberId);
+      if (member) member.pingMs = pingMs;
+    }
+    const pingLabel = this.pingLabelByMemberId.get(memberId);
+    if (pingLabel) pingLabel.textContent = ` [${Math.round(pingMs)}ms]`;
   }
 
   pushChat(msg: ChatMessage) {

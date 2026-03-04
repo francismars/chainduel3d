@@ -274,6 +274,7 @@ export type RoomServerMessage =
   | { type: 'chat_message'; roomId: string; message: ChatMessage }
   | { type: 'race_snapshot'; roomId: string; snapshot: OnlineRaceSnapshot }
   | { type: 'room_ping'; sentAt: number }
+  | { type: 'room_member_ping'; roomId: string; memberId: string; pingMs: number }
   | { type: 'error'; message: string }
   | { type: 'session_update'; session: GameSession };
 
