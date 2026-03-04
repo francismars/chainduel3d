@@ -12,6 +12,9 @@ import { PaymentUI } from './lobby/PaymentUI';
 import { ResultUI } from './lobby/ResultUI';
 import { ChatMessage, GAME_CONFIG, GameMode, OnlineRaceSnapshot, RoomState, RouteCustomLayout, RouteDefinition } from 'shared/types';
 import { RoomClient } from './online/RoomClient';
+import { registerSW } from 'virtual:pwa-register';
+
+registerSW({ immediate: true });
 
 const SPONSOR_LOGO_IMPORTS = import.meta.glob('./assets/sponsors/*.{png,jpg,jpeg,webp,svg}', {
   eager: true,
