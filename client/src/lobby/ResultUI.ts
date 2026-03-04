@@ -1,4 +1,4 @@
-import type { GameMode } from 'shared/types';
+import type { GameMode, RaceItemStats } from 'shared/types';
 import QRCode from 'qrcode';
 const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
 
@@ -16,6 +16,8 @@ export class ResultUI {
     lnurl: string | null,
     onContinue: () => void,
     mode: GameMode = 'classic',
+    itemStats: RaceItemStats[] = [],
+    playerNames: string[] = [],
   ) {
     this.container.innerHTML = '';
     const compactLayout = window.innerHeight < 860;
@@ -81,6 +83,49 @@ export class ResultUI {
         <div>3. ${p3}</div>
       `;
       card.appendChild(podium);
+    }
+
+    if (itemStats.length > 0) {
+      const statsWrap = document.createElement('div');
+      statsWrap.style.cssText = `
+        margin-bottom:${compactLayout ? '12px' : '18px'};
+        padding:10px 12px;border:1px solid #2c2c2c;border-radius:6px;
+        background:rgba(10,10,10,0.9);width:min(560px,90vw);
+      `;
+      const title = document.createElement('div');
+      title.textContent = 'ITEM STATS';
+      title.style.cssText = 'color:#fff;letter-spacing:1px;font-size:12px;margin-bottom:6px;';
+      statsWrap.appendChild(title);
+      const rows = [...itemStats].sort((a, b) => a.playerIndex - b.playerIndex);
+      const body = document.createElement('div');
+      body.style.cssText = 'display:grid;grid-template-columns:1.4fr .7fr .7fr .9fr .8fr .8fr;gap:6px;font-size:11px;color:#d6d6d6;';
+      const header = ['RIDER', 'PICK', 'USE', 'EFF', 'HIT', 'DENY'];
+      for (const col of header) {
+        const cell = document.createElement('div');
+        cell.textContent = col;
+        cell.style.cssText = 'color:#9f9f9f;font-size:10px;letter-spacing:0.6px;border-bottom:1px solid #252525;padding-bottom:3px;';
+        body.appendChild(cell);
+      }
+      for (const row of rows) {
+        const eff = row.uses > 0 ? `${Math.round((row.hitsLanded / row.uses) * 100)}%` : '--';
+        const rider = playerNames[row.playerIndex] ?? `P${row.playerIndex + 1}`;
+        const cells = [
+          rider,
+          String(row.pickups),
+          String(row.uses),
+          eff,
+          String(row.hitsLanded),
+          String(row.denied),
+        ];
+        for (const text of cells) {
+          const cell = document.createElement('div');
+          cell.textContent = text;
+          cell.style.cssText = 'padding:2px 0;border-bottom:1px solid #191919;';
+          body.appendChild(cell);
+        }
+      }
+      statsWrap.appendChild(body);
+      card.appendChild(statsWrap);
     }
 
     // QR code for withdrawal (if lnurl provided)

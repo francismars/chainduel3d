@@ -253,6 +253,12 @@ export class HUD {
     }
   }
 
+  pushEvent(text: string, tone: 'neutral' | 'warn' | 'danger' = 'neutral', ttlMs = 2800) {
+    void text;
+    void tone;
+    void ttlMs;
+  }
+
   private formatTime(sec: number): string {
     if (!Number.isFinite(sec)) return '--:--.---';
     const m = Math.floor(sec / 60);

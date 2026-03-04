@@ -840,12 +840,66 @@ export function buildItemBoxPositions(
     }
     return positions;
   }
-  const interval = Math.max(1, Math.floor(routePoints.length / numBoxes));
-  for (let i = 1; i <= numBoxes; i++) {
-    const idx = (i * interval) % routePoints.length;
-    const p = routePoints[idx];
-    if (p.ramp) continue;
-    positions.push({ x: p.x, y: p.y + 1.0, z: p.z });
+  const n = routePoints.length;
+  const startZoneRadius = Math.max(6, Math.floor(n * 0.06));
+  const isInStartZone = (idx: number) => {
+    const wrapped = ((idx % n) + n) % n;
+    const distToStart = Math.min(wrapped, n - wrapped);
+    return distToStart <= startZoneRadius;
+  };
+  const findUsablePoint = (baseIdx: number): SimRoutePoint | null => {
+    const idx0 = ((baseIdx % n) + n) % n;
+    const base = routePoints[idx0];
+    if (base && !base.ramp && !isInStartZone(idx0)) return base;
+    const maxSearch = Math.max(6, Math.floor(n * 0.04));
+    for (let step = 1; step <= maxSearch; step++) {
+      const fwdIdx = (idx0 + step) % n;
+      const fwd = routePoints[fwdIdx];
+      if (fwd && !fwd.ramp && !isInStartZone(fwdIdx)) return fwd;
+      const backIdx = (idx0 - step + n) % n;
+      const back = routePoints[backIdx];
+      if (back && !back.ramp && !isInStartZone(backIdx)) return back;
+    }
+    return null;
+  };
+
+  // Spawn in side-by-side gates. Wider track sections can use 3-wide gates.
+  const gateCount = Math.max(1, Math.ceil(numBoxes / 2));
+  const gateInterval = n / gateCount;
+  const centerToSide = (laneOffset: number, lane: number, laneCount: number) => {
+    if (laneCount <= 1) return 0;
+    if (laneCount === 2) return lane === 0 ? -laneOffset : laneOffset;
+    return lane === 0 ? -laneOffset : lane === 1 ? 0 : laneOffset;
+  };
+  for (let gate = 0; gate < gateCount && positions.length < numBoxes; gate++) {
+    const gateIdx = Math.floor((gate + 1) * gateInterval) % n;
+    const p = findUsablePoint(gateIdx);
+    if (!p) continue;
+    const rightX = p.dirZ;
+    const rightZ = -p.dirX;
+    const halfWidth = Math.max(2.2, p.width * 0.5);
+    const canThreeWide = halfWidth >= 6.2;
+    const remaining = numBoxes - positions.length;
+    const laneCount = canThreeWide && remaining >= 3 ? 3 : Math.min(2, remaining);
+    const laneOffset = Math.min(3.0, Math.max(1.2, halfWidth * 0.36));
+    for (let lane = 0; lane < laneCount && positions.length < numBoxes; lane++) {
+      const offset = centerToSide(laneOffset, lane, laneCount);
+      positions.push({
+        x: p.x + rightX * offset,
+        y: p.y + 1.0,
+        z: p.z + rightZ * offset,
+      });
+    }
+  }
+
+  // Keep requested count even when ramps remove candidates.
+  if (positions.length < numBoxes) {
+    const interval = Math.max(1, Math.floor(n / numBoxes));
+    for (let i = 1; i <= numBoxes && positions.length < numBoxes; i++) {
+      const p = findUsablePoint((i * interval) % n);
+      if (!p) continue;
+      positions.push({ x: p.x, y: p.y + 1.0, z: p.z });
+    }
   }
   return positions;
 }
