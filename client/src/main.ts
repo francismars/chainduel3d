@@ -386,6 +386,11 @@ class ChainDuel3DApp {
         aiToFill--;
       }
     }
+    this.playerNames = [...names];
+    this.isAI = [...isAI];
+    this.chainClasses = [...(room.settings.chainClasses ?? ['balanced', 'balanced', 'balanced', 'balanced'])];
+    this.totalLaps = room.settings.laps;
+    this.selectedRouteId = room.settings.routeId || 'default';
     const localSlot = room.members.find(m => m.memberId === this.onlineMemberId)?.slotIndex ?? -1;
     this.gameMode = room.settings.mode ?? 'classic';
     this.state = 'racing';
@@ -395,7 +400,7 @@ class ChainDuel3DApp {
       this.container,
       names,
       isAI,
-      room.settings.chainClasses ?? ['balanced', 'balanced', 'balanced', 'balanced'],
+      this.chainClasses,
       room.settings.laps,
       {
         enabled: true,
