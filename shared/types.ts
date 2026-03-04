@@ -169,6 +169,15 @@ export interface OnlineRaceEvent {
   itemId?: ItemId;
 }
 
+export interface RaceItemStats {
+  playerIndex: number;
+  pickups: number;
+  uses: number;
+  hitsLanded: number;
+  hitsTaken: number;
+  denied: number;
+}
+
 export interface OnlineRaceSnapshot {
   tick: number;
   players: OnlinePlayerState[];

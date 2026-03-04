@@ -8,7 +8,7 @@ import { InputManager } from './InputManager';
 import { ItemSystem } from './ItemSystem';
 import { HUD } from './HUD';
 import { Countdown } from './Countdown';
-import { GameMode, ItemId, OnlineRaceEvent, OnlineRaceInput, OnlineRaceSnapshot, RoomMember, RouteCustomLayout } from 'shared/types';
+import { GameMode, ItemId, OnlineRaceEvent, OnlineRaceInput, OnlineRaceSnapshot, RaceItemStats, RoomMember, RouteCustomLayout } from 'shared/types';
 import {
   createDefaultRuntimeState,
   createSimRandomState,
@@ -133,6 +133,15 @@ export class Game {
   private sponsorLogoUrls: string[];
   private gameMode: GameMode;
   private isArenaLayout = false;
+  private itemStats: RaceItemStats[] = Array.from({ length: NUM_PLAYERS }, (_, playerIndex) => ({
+    playerIndex,
+    pickups: 0,
+    uses: 0,
+    hitsLanded: 0,
+    hitsTaken: 0,
+    denied: 0,
+  }));
+  private lastHeldItems: Array<ItemId | null> = new Array(NUM_PLAYERS).fill(null);
 
   constructor(
     container: HTMLElement,
@@ -238,6 +247,7 @@ export class Game {
     this.inputManager = new InputManager(this.container);
     this.itemSystem = new ItemSystem(this.scene, this.route.itemBoxPositions);
     this.itemSystem.setLocalAuthorityEnabled(!this.online?.enabled);
+    this.lastHeldItems = this.itemSystem.playerItems.map(item => this.normalizeItemId(item));
     const minimapPath = this.route.routePoints
       .filter((_, idx) => idx % 4 === 0)
       .map(tp => new THREE.Vector2(tp.position.x, tp.position.z));
@@ -379,6 +389,15 @@ export class Game {
       this.raceRouteLayout as any,
     );
     this.btcPollTimerMs = 250;
+    this.itemStats = Array.from({ length: NUM_PLAYERS }, (_, playerIndex) => ({
+      playerIndex,
+      pickups: 0,
+      uses: 0,
+      hitsLanded: 0,
+      hitsTaken: 0,
+      denied: 0,
+    }));
+    this.lastHeldItems = new Array(NUM_PLAYERS).fill(null);
     if (!this.online?.enabled) {
       this.countdown.start();
     } else {
@@ -896,8 +915,12 @@ export class Game {
       };
     });
     for (let i = 0; i < NUM_PLAYERS; i++) {
+      const prevHeld = this.normalizeItemId(this.itemSystem.playerItems[i]);
       collectNearbyItem(i, postStepItemPlayers as any, this.localSimItemBoxes, this.finalLapIntensityActive);
       this.itemSystem.playerItems[i] = postStepItemPlayers[i].heldItemId;
+      const nextHeld = this.normalizeItemId(this.itemSystem.playerItems[i]);
+      if (!prevHeld && nextHeld) this.registerPickup(i, nextHeld);
+      this.lastHeldItems[i] = nextHeld;
     }
 
     for (let i = 0; i < NUM_PLAYERS; i++) {
@@ -1025,6 +1048,10 @@ export class Game {
       kart.speedBoostActive = !!b.speedBoostActive;
       kart.slowActive = !!b.slowActive;
       this.itemSystem.playerItems[i] = b.heldItemId;
+      const prevHeld = this.lastHeldItems[i];
+      const nextHeld = this.normalizeItemId(b.heldItemId);
+      if (!prevHeld && nextHeld) this.registerPickup(i, nextHeld);
+      this.lastHeldItems[i] = nextHeld;
       this.chainLengths[i] = kart.getChainLength();
       this.eliminated[i] = kart.isEliminated();
     }
@@ -1042,7 +1069,23 @@ export class Game {
   }
 
   private consumeRaceEvents(events: OnlineRaceEvent[], source: 'local' | 'online') {
-    for (const event of events) this.applyRaceEvent(event, source);
+    const countedUses = new Set<string>();
+    for (const event of events) {
+      if (event.type === 'item_used' && event.itemId) {
+        const key = `${event.playerIndex}:${event.itemId}`;
+        if (!countedUses.has(key)) {
+          countedUses.add(key);
+          this.itemStats[event.playerIndex].uses += 1;
+        }
+        if (event.targetPlayerIndex != null) {
+          this.itemStats[event.playerIndex].hitsLanded += 1;
+          this.itemStats[event.targetPlayerIndex].hitsTaken += 1;
+        } else if (event.itemId === 'fee_spike' || event.itemId === 'sats_siphon' || event.itemId === 'nostr_zap') {
+          this.itemStats[event.playerIndex].denied += 1;
+        }
+      }
+      this.applyRaceEvent(event, source);
+    }
   }
 
   private applyRaceEvent(event: OnlineRaceEvent, source: 'local' | 'online') {
@@ -1091,13 +1134,22 @@ export class Game {
       case 'steal_hit': {
         if (event.targetPlayerIndex == null) return;
         const targetPos = this.karts[event.targetPlayerIndex]?.getPosition();
+        this.hud.pushEvent(
+          `P${event.playerIndex + 1} STOLE FROM P${event.targetPlayerIndex + 1}`,
+          'warn',
+        );
         this.showGlobalFeedback(
           `P${event.playerIndex + 1} -1  |  P${event.targetPlayerIndex + 1} +1`,
           targetPos ?? sourcePos,
+          'warn',
         );
+        if (event.targetPlayerIndex === this.getLocalPlayerIndex()) {
+          this.hud.pushEvent('YOU LOST A CHAIN BLOCK', 'danger', 3200);
+        }
         return;
       }
       case 'sacrifice_boost': {
+        this.hud.pushEvent(`P${event.playerIndex + 1} SACRIFICE BOOST`, 'neutral');
         this.showGlobalFeedback(`P${event.playerIndex + 1} SACRIFICE BOOST`, sourcePos);
         return;
       }
@@ -1106,7 +1158,19 @@ export class Game {
         if (!item) return;
         this.itemSystem.playOnlineItemEffect(item, event.playerIndex, event.targetPlayerIndex, this.karts);
         const itemLabel = this.getItemShortLabel(item);
-        this.showGlobalFeedback(`P${event.playerIndex + 1} ${itemLabel}`, sourcePos);
+        const targeted = event.targetPlayerIndex != null;
+        const tone = targeted ? 'warn' : (item === 'fee_spike' || item === 'sats_siphon' || item === 'nostr_zap' ? 'danger' : 'neutral');
+        this.hud.pushEvent(
+          targeted
+            ? `P${event.playerIndex + 1} ${itemLabel} -> P${event.targetPlayerIndex! + 1}`
+            : `P${event.playerIndex + 1} ${itemLabel}`,
+          tone,
+        );
+        this.showGlobalFeedback(`P${event.playerIndex + 1} ${itemLabel}`, sourcePos, tone);
+        if (event.targetPlayerIndex === this.getLocalPlayerIndex()) {
+          this.hud.pushEvent(`YOU WERE HIT: ${itemLabel}`, 'danger', 3400);
+          this.showGlobalFeedback(`YOU GOT HIT: ${itemLabel}`, this.karts[event.targetPlayerIndex].getPosition(), 'danger');
+        }
         return;
       }
       default:
@@ -1121,6 +1185,23 @@ export class Game {
     if (item === 'sats_siphon') return 'SATS SIPHON';
     if (item === 'nostr_zap') return 'NOSTR ZAP';
     return 'ITEM';
+  }
+
+  private normalizeItemId(item: string | null | undefined): ItemId | null {
+    return (item === 'ln_turbo' || item === 'mempool_mine' || item === 'fee_spike' || item === 'sats_siphon' || item === 'nostr_zap')
+      ? item
+      : null;
+  }
+
+  private registerPickup(playerIndex: number, item: ItemId) {
+    this.itemStats[playerIndex].pickups += 1;
+    const label = this.getItemShortLabel(item);
+    this.hud.pushEvent(`P${playerIndex + 1} PICKED ${label}`, 'neutral');
+  }
+
+  private getLocalPlayerIndex(): number {
+    if (this.online?.enabled) return Math.max(0, this.online.localSlot);
+    return this.humanPlayerIndices[0] ?? 0;
   }
 
   private lerpAngle(a: number, b: number, t: number): number {
@@ -1367,16 +1448,26 @@ export class Game {
     this.showGlobalFeedback(msg, worldPos);
   }
 
-  private showGlobalFeedback(text: string, worldPos?: THREE.Vector3) {
+  private showGlobalFeedback(
+    text: string,
+    worldPos?: THREE.Vector3,
+    tone: 'neutral' | 'warn' | 'danger' = 'neutral',
+  ) {
     const div = document.createElement('div');
     div.textContent = text;
     const left = worldPos ? `${50 + Math.max(-35, Math.min(35, worldPos.x * 0.18))}%` : '50%';
     const top = worldPos ? `${50 + Math.max(-25, Math.min(25, worldPos.z * 0.12))}%` : '45%';
+    const color = tone === 'danger' ? '#ffd7d7' : tone === 'warn' ? '#fff0bf' : '#ffffff';
+    const glow = tone === 'danger'
+      ? 'rgba(255,120,120,0.65), 0 0 26px rgba(255,120,120,0.35)'
+      : tone === 'warn'
+        ? 'rgba(255,220,130,0.65), 0 0 24px rgba(255,220,130,0.3)'
+        : 'rgba(255,255,255,0.8), 0 0 22px rgba(255,255,255,0.45)';
     div.style.cssText = `
       position:absolute; left:${left}; top:${top}; transform:translate(-50%,-50%);
       z-index:30; pointer-events:none;
-      color:#ffffff; font-family:'Courier New', monospace; font-size:18px; font-weight:bold;
-      text-shadow:0 0 10px rgba(255,255,255,0.8), 0 0 22px rgba(255,255,255,0.45);
+      color:${color}; font-family:'Courier New', monospace; font-size:18px; font-weight:bold;
+      text-shadow:0 0 10px ${glow};
       opacity:1; transition: opacity 0.35s ease, transform 0.35s ease;
     `;
     this.container.appendChild(div);
@@ -1652,6 +1743,10 @@ export class Game {
       this.gameMode,
     );
     return placements.slice(0, count);
+  }
+
+  getItemStats(): RaceItemStats[] {
+    return this.itemStats.map(s => ({ ...s }));
   }
 
   dispose() {

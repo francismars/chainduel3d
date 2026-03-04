@@ -13,6 +13,7 @@ interface ItemBox {
   spriteTex: THREE.CanvasTexture;
   previewItem: ItemId;
   previewTimer: number;
+  previewFlashTimer: number;
 }
 
 interface ForkBombObstacle {
@@ -92,6 +93,7 @@ export class ItemSystem {
         spriteTex: tex,
         previewItem,
         previewTimer: 0,
+        previewFlashTimer: 0.35,
       };
       this.paintPreviewIcon(box, previewItem);
       this.itemBoxes.push(box);
@@ -114,6 +116,7 @@ export class ItemSystem {
 
     for (const box of this.itemBoxes) {
       if (box.active) {
+        box.previewFlashTimer = Math.max(0, box.previewFlashTimer - dt);
         box.mesh.rotation.y = time * 2;
         box.mesh.position.y = box.position.y + Math.sin(time * 3) * 0.3;
 
@@ -124,6 +127,10 @@ export class ItemSystem {
         // Orbiting ring
         box.ring.rotation.x = time * 1.5;
         box.ring.rotation.z = time * 0.8;
+        const ringMat = box.ring.material as THREE.MeshBasicMaterial;
+        const flash = box.previewFlashTimer > 0 ? box.previewFlashTimer / 0.35 : 0;
+        ringMat.opacity = 0.2 + flash * 0.55;
+        box.sprite.scale.setScalar(0.6 + flash * 0.16);
         box.mesh.visible = true;
       } else {
         box.mesh.visible = false;
@@ -155,6 +162,7 @@ export class ItemSystem {
         if (box.previewTimer <= 0) {
           box.previewItem = this.rollPreviewItem();
           this.paintPreviewIcon(box, box.previewItem);
+          box.previewFlashTimer = 0.35;
           box.previewTimer = this.finalLapIntensity ? 1.1 : 2.2;
         }
 
@@ -171,6 +179,7 @@ export class ItemSystem {
           box.active = true;
           box.previewItem = this.rollPreviewItem();
           this.paintPreviewIcon(box, box.previewItem);
+          box.previewFlashTimer = 0.35;
           box.previewTimer = this.finalLapIntensity ? 0.9 : 1.8;
         }
       }
@@ -461,6 +470,7 @@ export class ItemSystem {
       if (local.previewItem !== remote.previewItem) {
         local.previewItem = remote.previewItem;
         this.paintPreviewIcon(local, remote.previewItem);
+        local.previewFlashTimer = 0.35;
       }
     }
   }

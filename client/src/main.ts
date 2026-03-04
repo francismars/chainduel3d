@@ -10,11 +10,16 @@ import {
 } from './game/Route';
 import { PaymentUI } from './lobby/PaymentUI';
 import { ResultUI } from './lobby/ResultUI';
-import { ChatMessage, GAME_CONFIG, GameMode, OnlineRaceSnapshot, RoomState, RouteCustomLayout, RouteDefinition } from 'shared/types';
+import { ChatMessage, GAME_CONFIG, GameMode, OnlineRaceSnapshot, RaceItemStats, RoomState, RouteCustomLayout, RouteDefinition } from 'shared/types';
 import { RoomClient } from './online/RoomClient';
-import { registerSW } from 'virtual:pwa-register';
 
-registerSW({ immediate: true });
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // PWA registration is optional during local/dev flows.
+    });
+  });
+}
 
 const SPONSOR_LOGO_IMPORTS = import.meta.glob('./assets/sponsors/*.{png,jpg,jpeg,webp,svg}', {
   eager: true,
@@ -117,6 +122,7 @@ class ChainDuel3DApp {
   private sponsorPreviewRows: SponsorPreviewRow[] | null = null;
   private sponsorPreviewLoading = false;
   private gameMode: GameMode = 'classic';
+  private lastRaceItemStats: RaceItemStats[] = [];
 
   constructor() {
     this.container = document.getElementById('app')!;
@@ -419,6 +425,7 @@ class ChainDuel3DApp {
       this.onlineFinishTransitionTimeoutId = null;
     }
     this.state = 'result';
+    this.lastRaceItemStats = this.game ? this.game.getItemStats() : [];
     if (this.game) {
       this.game.dispose();
       this.game = null;
@@ -448,6 +455,8 @@ class ChainDuel3DApp {
             data.lnurl,
             () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
             this.gameMode,
+            this.lastRaceItemStats,
+            this.playerNames,
           );
           return;
         }
@@ -461,6 +470,8 @@ class ChainDuel3DApp {
       null,
       () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
       this.gameMode,
+      this.lastRaceItemStats,
+      this.playerNames,
     );
   }
 
