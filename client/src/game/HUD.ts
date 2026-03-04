@@ -8,6 +8,7 @@ export class HUD {
   private elements: HTMLElement[] = [];
   private playerNames: string[];
   private panelPlayers: number[] = [];
+  private singlePlayerLayout = false;
   private minimapPath: Array<{ x: number; y: number }> = [];
   private minimapBounds = { minX: -1, maxX: 1, minY: -1, maxY: 1 };
   private prevBlocks: number[] = [];
@@ -42,32 +43,28 @@ export class HUD {
     `;
     container.appendChild(overlay);
 
-    // Up to 4 panels: top-left, top-right, bottom-left, bottom-right
-    const panelPositions = [
-      'top: 10px; left: 10px;',
-      'top: 10px; right: 10px;',
-      'bottom: 10px; left: 10px;',
-      'bottom: 10px; right: 10px;',
-    ];
-
     const visible = visiblePlayerIndices && visiblePlayerIndices.length > 0
       ? visiblePlayerIndices
       : playerNames.map((_, i) => i);
+    this.singlePlayerLayout = visible.length === 1;
+
+    if (this.singlePlayerLayout) {
+      const root = document.createElement('div');
+      root.style.cssText = `
+        position:absolute; inset:0;
+      `;
+      overlay.appendChild(root);
+      this.elements.push(root);
+      this.panelPlayers.push(visible[0]);
+      this.minimapCanvasEls.push(null);
+      return;
+    }
 
     for (let i = 0; i < visible.length && i < 4; i++) {
       const playerIndex = visible[i];
       const panel = document.createElement('div');
       panel.style.cssText = `
-        position: absolute;
-        ${panelPositions[i]}
-        width: calc(50% - 24px); max-width: 280px;
-        background: linear-gradient(180deg, rgba(14,14,14,0.9), rgba(6,6,6,0.85));
-        border: 1px solid #303030;
-        border-radius: 6px;
-        padding: 8px 10px;
-        color: #b5b5b5;
-        font-size: 11px;
-        box-shadow: 0 0 12px rgba(255,255,255,0.06);
+        position: absolute; pointer-events:none;
       `;
       overlay.appendChild(panel);
       this.elements.push(panel);
@@ -155,65 +152,92 @@ export class HUD {
       }
 
       if (shouldRefreshHud) {
-        this.elements[panelIdx].innerHTML = `
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
-          <div>
-            <div style="font-size:13px;font-weight:bold;color:#fff;letter-spacing:1px">${this.playerNames[i]}</div>
-            <div style="font-size:10px;color:#8c8c8c">${this.gameMode === 'derby' ? derbyTopText : `LAP ${lap}/${this.totalLaps} · BEST ${bestLap}`}</div>
-          </div>
-          <div style="font-size:28px;font-weight:900;line-height:0.9;color:${positionColor};text-shadow:0 0 14px ${positionColor}">${pos}</div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:62px 1fr 84px;gap:8px;margin-bottom:8px;align-items:center">
-          <div style="height:56px;border:1px solid #3a3a3a;border-radius:6px;background:linear-gradient(180deg,#161616,#0b0b0b);display:flex;flex-direction:column;align-items:center;justify-content:center">
-            <div style="font-size:20px;line-height:1">${itemEmoji}</div>
-            <div style="font-size:8px;color:#b8b8b8;margin-top:2px">${itemLabel}</div>
-          </div>
-          <div style="position:relative;height:56px;display:flex;align-items:center;justify-content:center">
-            <div style="width:56px;height:56px;border-radius:50%;background:
-              radial-gradient(circle at center, #0b0b0b 32%, transparent 33%),
-              conic-gradient(#f1f1f1 ${speedFill * 3.6}deg, #242424 0deg);
-              border:1px solid #343434;">
-            </div>
-            <div style="position:absolute;text-align:center">
-              <div style="font-size:15px;color:#fff;font-weight:bold">${speed}</div>
-              <div style="font-size:8px;color:#8d8d8d">km/h</div>
-            </div>
-          </div>
-          <div style="font-size:10px;color:#9a9a9a;line-height:1.3">
-            <div>RACE ${lastLap}</div>
-            <div>${this.gameMode === 'derby' ? `ALIVE ${survivors}` : `CP ${cpPassed}/${cpTotal}`} <span style="display:inline-block;transform:rotate(${nextArrow.toFixed(2)}rad);margin-left:4px;color:#fff">▲</span></div>
-            <div>DRIFT <span style="color:#fff;text-shadow:0 0 8px ${driftGlow}">${driftStatus}</span></div>
-          </div>
-        </div>
-
-        <div style="margin-bottom:5px">
-          <div style="display:flex;justify-content:space-between;color:#8f8f8f;font-size:10px;margin-bottom:2px">
-            <span>BOOST CHARGE</span><span>${Math.round(driftFill)}%</span>
-          </div>
-          <div style="height:5px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:4px;overflow:hidden">
-            <div style="width:${driftFill}%;height:100%;background:linear-gradient(90deg,#6c6c6c,#ffffff);box-shadow:0 0 8px ${driftGlow}"></div>
-          </div>
-        </div>
-
-        <div>
-          <div style="display:flex;justify-content:space-between;color:#8f8f8f;font-size:10px;margin-bottom:2px">
-            <span>${this.gameMode === 'derby' ? 'HEALTH' : 'CHAIN'}</span>
-            <span style="color:${isOut ? '#b0b0b0' : '#fff'}">
-              ${isOut ? 'ELIMINATED' : `${blocks} BLOCKS ${blockDeltaText}`}
-            </span>
-          </div>
-          <div style="height:8px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:4px;overflow:hidden;position:relative">
-            <div style="width:${chainFill}%;height:100%;background:linear-gradient(90deg,#5f5f5f,#d9d9d9)"></div>
-            ${pulseOn ? `<div style="position:absolute;inset:0;background:rgba(255,255,255,0.18)"></div>` : ''}
-          </div>
-        </div>
-        <div style="margin-top:6px;display:flex;gap:2px">${this.renderChainPips(blocks, maxBlocks)}</div>
-        <div style="margin-top:6px;font-size:10px;color:#9a9a9a;border-top:1px solid #242424;padding-top:4px">
-          <span style="color:#d0d0d0">RIVAL ITEMS:</span> ${rivalItems}
-        </div>
-        <canvas data-minimap="1" width="124" height="72" style="margin-top:6px;width:100%;height:56px;border:1px solid #2f2f2f;border-radius:4px;background:#090909"></canvas>
-      `;
+        const mobileHud = this.isMobileViewport();
+        this.elements[panelIdx].innerHTML = this.singlePlayerLayout
+          ? (mobileHud
+            ? this.renderSinglePlayerMobileHud({
+              i,
+              lap,
+              pos,
+              positionColor,
+              itemEmoji,
+              itemLabel,
+              speed,
+              speedFill,
+              lastLap,
+              derbyTopText,
+              cpPassed,
+              cpTotal,
+              nextArrow,
+              driftStatus,
+              driftFill,
+              driftGlow,
+              blocks,
+              blockDeltaText,
+              chainFill,
+              pulseOn,
+              maxBlocks,
+              isOut,
+              bestLap,
+              rivalItems,
+              survivors,
+            })
+            : this.renderSinglePlayerHud({
+            i,
+            lap,
+            pos,
+            positionColor,
+            itemEmoji,
+            itemLabel,
+            speed,
+            speedFill,
+            lastLap,
+            derbyTopText,
+            cpPassed,
+            cpTotal,
+            nextArrow,
+            driftStatus,
+            driftFill,
+            driftGlow,
+            blocks,
+            blockDeltaText,
+            chainFill,
+            pulseOn,
+            maxBlocks,
+            isOut,
+            bestLap,
+            rivalItems,
+            survivors,
+            }))
+          : this.renderCompactPanelHud({
+            i,
+            panelIdx,
+            totalPanels: this.elements.length,
+            lap,
+            pos,
+            positionColor,
+            itemEmoji,
+            itemLabel,
+            speed,
+            speedFill,
+            lastLap,
+            derbyTopText,
+            cpPassed,
+            cpTotal,
+            nextArrow,
+            driftStatus,
+            driftFill,
+            driftGlow,
+            blocks,
+            blockDeltaText,
+            chainFill,
+            pulseOn,
+            maxBlocks,
+            isOut,
+            bestLap,
+            rivalItems,
+            survivors,
+          });
         this.minimapCanvasEls[panelIdx] =
           this.elements[panelIdx].querySelector('canvas[data-minimap="1"]') as HTMLCanvasElement | null;
 
@@ -353,6 +377,335 @@ export class HUD {
     while (rel > Math.PI) rel -= Math.PI * 2;
     while (rel < -Math.PI) rel += Math.PI * 2;
     return rel;
+  }
+
+  private renderCompactPanelHud(s: {
+    i: number;
+    panelIdx: number;
+    totalPanels: number;
+    lap: number;
+    pos: string;
+    positionColor: string;
+    itemEmoji: string;
+    itemLabel: string;
+    speed: string;
+    speedFill: number;
+    lastLap: string;
+    derbyTopText: string;
+    cpPassed: number;
+    cpTotal: number;
+    nextArrow: number;
+    driftStatus: string;
+    driftFill: number;
+    driftGlow: string;
+    blocks: number;
+    blockDeltaText: string;
+    chainFill: number;
+    pulseOn: boolean;
+    maxBlocks: number;
+    isOut: boolean;
+    bestLap: string;
+    rivalItems: string;
+    survivors: number;
+  }): string {
+    const slot = this.getSplitSlotRect(s.panelIdx, s.totalPanels);
+    const mobileHud = this.isMobileViewport();
+    const hudDensity = s.totalPanels >= 4 || mobileHud ? 'small' : s.totalPanels === 3 ? 'medium' : 'wide';
+    const pad = hudDensity === 'small' ? 4 : 6;
+    const panelMaxWidth = hudDensity === 'small' ? 230 : hudDensity === 'medium' ? 260 : 320;
+    const speedFont = hudDensity === 'small' ? 16 : hudDensity === 'medium' ? 18 : 22;
+    const posFont = hudDensity === 'small' ? 22 : hudDensity === 'medium' ? 25 : 30;
+    const showRival = s.totalPanels <= 2 && !mobileHud;
+    const showPips = hudDensity !== 'small';
+    const infoText = this.gameMode === 'derby'
+      ? `ALIVE ${s.survivors}`
+      : `CP ${s.cpPassed}/${s.cpTotal}`;
+    const bestOrClock = this.gameMode === 'derby'
+      ? `TIME ${s.lastLap}`
+      : `BEST ${s.bestLap}`;
+    this.elements[s.panelIdx].style.cssText = `
+      position:absolute;
+      left:${slot.left.toFixed(3)}%;
+      top:${slot.top.toFixed(3)}%;
+      width:${slot.width.toFixed(3)}%;
+      height:${slot.height.toFixed(3)}%;
+      pointer-events:none;
+      overflow:hidden;
+    `;
+    return `
+      <div style="position:absolute;left:${pad}px;top:${pad}px;width:calc(100% - ${pad * 2}px);max-width:${panelMaxWidth}px;background:linear-gradient(180deg, rgba(14,14,14,0.92), rgba(6,6,6,0.86));border:1px solid #2f2f2f;border-radius:7px;padding:${hudDensity === 'small' ? '5px 6px' : '6px 8px'};box-shadow:0 0 12px rgba(0,0,0,0.45)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+          <div style="min-width:0;flex:1">
+            <div style="font-size:${hudDensity === 'small' ? 10 : 11}px;font-weight:bold;color:#fff;letter-spacing:0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${this.playerNames[s.i]}</div>
+            <div style="font-size:${hudDensity === 'small' ? 8 : 9}px;color:#9a9a9a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${this.gameMode === 'derby' ? s.derbyTopText : `LAP ${s.lap}/${this.totalLaps} · ${bestOrClock}`}</div>
+          </div>
+          <div style="font-size:${posFont}px;font-weight:900;line-height:0.9;color:${s.positionColor};text-shadow:0 0 14px ${s.positionColor}">${s.pos}</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:${hudDensity === 'small' ? '42px 1fr auto' : '52px 1fr auto'};gap:${hudDensity === 'small' ? 5 : 7}px;margin-top:${hudDensity === 'small' ? 5 : 6}px;align-items:center">
+          <div style="height:${hudDensity === 'small' ? 42 : 52}px;border:1px solid #3a3a3a;border-radius:6px;background:linear-gradient(180deg,#161616,#0b0b0b);display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div style="font-size:${hudDensity === 'small' ? 16 : 19}px;line-height:1">${s.itemEmoji}</div>
+            <div style="font-size:7px;color:#b8b8b8;margin-top:1px;max-width:38px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center">${s.itemLabel}</div>
+          </div>
+          <div>
+            <div style="display:flex;align-items:flex-end;gap:5px;line-height:1">
+              <span style="font-size:${speedFont}px;color:#fff;font-weight:900">${s.speed}</span>
+              <span style="font-size:${hudDensity === 'small' ? 8 : 9}px;color:#8d8d8d;letter-spacing:0.7px">KM/H</span>
+            </div>
+            <div style="margin-top:3px;height:${hudDensity === 'small' ? 5 : 6}px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:4px;overflow:hidden">
+              <div style="width:${s.driftFill}%;height:100%;background:linear-gradient(90deg,#6c6c6c,#ffffff);box-shadow:0 0 8px ${s.driftGlow}"></div>
+            </div>
+            <div style="font-size:${hudDensity === 'small' ? 8 : 9}px;color:#a7a7a7;margin-top:2px">${infoText} · DRIFT <span style="color:#fff;text-shadow:0 0 8px ${s.driftGlow}">${s.driftStatus}</span></div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:2px;min-width:${hudDensity === 'small' ? 52 : 62}px">
+            <div style="font-size:${hudDensity === 'small' ? 8 : 9}px;color:#8f8f8f;white-space:nowrap">RACE ${s.lastLap}</div>
+            <div style="font-size:${hudDensity === 'small' ? 9 : 10}px;color:${s.isOut ? '#b0b0b0' : '#fff'};white-space:nowrap">${s.isOut ? 'OUT' : `${s.blocks} ${s.blockDeltaText}`}</div>
+            <div style="font-size:${hudDensity === 'small' ? 10 : 11}px;color:#fff;line-height:1;transform:rotate(${s.nextArrow.toFixed(2)}rad)">▲</div>
+          </div>
+        </div>
+
+        <div style="margin-top:${hudDensity === 'small' ? 4 : 5}px">
+          <div style="display:flex;justify-content:space-between;color:#8f8f8f;font-size:${hudDensity === 'small' ? 8 : 9}px;margin-bottom:2px">
+            <span>${this.gameMode === 'derby' ? 'HEALTH' : 'CHAIN'}</span><span>${Math.round(s.chainFill)}%</span>
+          </div>
+          <div style="height:${hudDensity === 'small' ? 6 : 7}px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:4px;overflow:hidden;position:relative">
+            <div style="width:${s.chainFill}%;height:100%;background:linear-gradient(90deg,#5f5f5f,#d9d9d9)"></div>
+            ${s.pulseOn ? `<div style="position:absolute;inset:0;background:rgba(255,255,255,0.16)"></div>` : ''}
+          </div>
+        </div>
+
+        ${showPips ? `
+        <div style="margin-top:5px;display:flex;gap:2px">${this.renderChainPips(s.blocks, s.maxBlocks)}</div>
+        ` : ''}
+        ${showRival ? `
+        <div style="margin-top:6px;font-size:9px;color:#9a9a9a;border-top:1px solid #242424;padding-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          <span style="color:#d0d0d0">RIVAL:</span> ${s.rivalItems}
+        </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  private renderSinglePlayerMobileHud(s: {
+    i: number;
+    lap: number;
+    pos: string;
+    positionColor: string;
+    itemEmoji: string;
+    itemLabel: string;
+    speed: string;
+    speedFill: number;
+    lastLap: string;
+    derbyTopText: string;
+    cpPassed: number;
+    cpTotal: number;
+    nextArrow: number;
+    driftStatus: string;
+    driftFill: number;
+    driftGlow: string;
+    blocks: number;
+    blockDeltaText: string;
+    chainFill: number;
+    pulseOn: boolean;
+    maxBlocks: number;
+    isOut: boolean;
+    bestLap: string;
+    rivalItems: string;
+    survivors: number;
+  }): string {
+    const topInset = 12;
+    return `
+      <div style="position:absolute;left:10px;right:10px;top:${topInset}px;background:linear-gradient(180deg,rgba(16,16,16,0.92),rgba(8,8,8,0.86));border:1px solid #353535;border-radius:10px;padding:7px 9px;box-shadow:0 0 16px rgba(0,0,0,0.45)">
+        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center">
+          <div style="font-size:30px;line-height:0.9;font-weight:900;color:${s.positionColor};text-shadow:0 0 14px ${s.positionColor};padding-right:4px">${s.pos}</div>
+          <div style="min-width:0">
+            <div style="font-size:11px;font-weight:bold;color:#fff;letter-spacing:0.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${this.playerNames[s.i]}</div>
+            <div style="font-size:9px;color:#9a9a9a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${this.gameMode === 'derby' ? s.derbyTopText : `LAP ${s.lap}/${this.totalLaps} · BEST ${s.bestLap}`}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="width:42px;height:42px;border:1px solid #3a3a3a;border-radius:8px;background:linear-gradient(180deg,#181818,#0b0b0b);display:flex;align-items:center;justify-content:center;font-size:19px">${s.itemEmoji}</div>
+            <div style="text-align:right;min-width:56px">
+              <div style="font-size:9px;color:#d9d9d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62px">${s.itemLabel}</div>
+              <div style="font-size:8px;color:#8e8e8e;margin-top:1px">RACE ${s.lastLap}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="position:absolute;left:10px;bottom:12px;width:48%;max-width:210px;background:linear-gradient(180deg,rgba(16,16,16,0.95),rgba(6,6,6,0.92));border:1px solid #353535;border-radius:10px;padding:8px 9px;box-shadow:0 0 16px rgba(0,0,0,0.45)">
+        <div style="display:flex;align-items:flex-end;gap:5px;line-height:1">
+          <span style="font-size:26px;color:#fff;font-weight:900">${s.speed}</span>
+          <span style="font-size:9px;color:#8d8d8d;letter-spacing:0.7px;margin-bottom:3px">KM/H</span>
+        </div>
+        <div style="margin-top:4px;height:6px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:4px;overflow:hidden">
+          <div style="width:${s.driftFill}%;height:100%;background:linear-gradient(90deg,#6c6c6c,#ffffff);box-shadow:0 0 8px ${s.driftGlow}"></div>
+        </div>
+        <div style="margin-top:3px;font-size:9px;color:#a8a8a8">${this.gameMode === 'derby' ? `ALIVE ${s.survivors}` : `CP ${s.cpPassed}/${s.cpTotal}`} <span style="display:inline-block;transform:rotate(${s.nextArrow.toFixed(2)}rad);margin-left:4px;color:#fff">▲</span> · DRIFT <span style="color:#fff;text-shadow:0 0 8px ${s.driftGlow}">${s.driftStatus}</span></div>
+      </div>
+
+      <div style="position:absolute;right:10px;bottom:12px;width:48%;max-width:220px;background:linear-gradient(180deg,rgba(16,16,16,0.95),rgba(6,6,6,0.92));border:1px solid #353535;border-radius:10px;padding:8px 9px;box-shadow:0 0 16px rgba(0,0,0,0.45)">
+        <div style="display:flex;justify-content:space-between;color:#8f8f8f;font-size:9px;margin-bottom:2px">
+          <span>${this.gameMode === 'derby' ? 'HEALTH' : 'CHAIN'}</span>
+          <span style="color:${s.isOut ? '#b0b0b0' : '#fff'}">${s.isOut ? 'OUT' : `${s.blocks} ${s.blockDeltaText}`}</span>
+        </div>
+        <div style="height:8px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:4px;overflow:hidden;position:relative">
+          <div style="width:${s.chainFill}%;height:100%;background:linear-gradient(90deg,#5f5f5f,#d9d9d9)"></div>
+          ${s.pulseOn ? `<div style="position:absolute;inset:0;background:rgba(255,255,255,0.17)"></div>` : ''}
+        </div>
+        <div style="margin-top:5px;display:flex;gap:2px">${this.renderChainPips(s.blocks, s.maxBlocks)}</div>
+      </div>
+
+      <div style="position:absolute;left:10px;bottom:94px;width:38%;max-width:170px;background:linear-gradient(180deg,rgba(16,16,16,0.9),rgba(7,7,7,0.84));border:1px solid #343434;border-radius:8px;padding:6px;box-shadow:0 0 14px rgba(0,0,0,0.45)">
+        <canvas data-minimap="1" width="170" height="96" style="width:100%;height:74px;border:1px solid #2d2d2d;border-radius:6px;background:#090909"></canvas>
+      </div>
+    `;
+  }
+
+  private isMobileViewport(): boolean {
+    if (typeof window === 'undefined') return false;
+    const coarsePointer = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(pointer: coarse)').matches
+      : false;
+    return coarsePointer || window.innerWidth <= 900;
+  }
+
+  private getSplitSlotRect(panelIndex: number, totalPanels: number): { left: number; top: number; width: number; height: number } {
+    const slots = this.getSplitSlots(totalPanels);
+    const safePanelIndex = Math.max(0, Math.min(slots.length - 1, panelIndex));
+    const slot = slots[safePanelIndex];
+    const left = ((slot.x - slot.w / 2) + 1) * 50;
+    const top = (1 - (slot.y + slot.h / 2)) * 50;
+    const width = slot.w * 50;
+    const height = slot.h * 50;
+    return { left, top, width, height };
+  }
+
+  private getSplitSlots(count: number): Array<{ x: number; y: number; w: number; h: number }> {
+    if (count <= 1) return [{ x: 0, y: 0, w: 2, h: 2 }];
+    if (count === 2) {
+      return [
+        { x: -0.5, y: 0, w: 1, h: 2 },
+        { x: 0.5, y: 0, w: 1, h: 2 },
+      ];
+    }
+    if (count === 3) {
+      return [
+        { x: 0, y: 0.5, w: 2, h: 1 },
+        { x: -0.5, y: -0.5, w: 1, h: 1 },
+        { x: 0.5, y: -0.5, w: 1, h: 1 },
+      ];
+    }
+    return [
+      { x: -0.5, y: 0.5, w: 1, h: 1 },
+      { x: 0.5, y: 0.5, w: 1, h: 1 },
+      { x: -0.5, y: -0.5, w: 1, h: 1 },
+      { x: 0.5, y: -0.5, w: 1, h: 1 },
+    ];
+  }
+
+  private renderSinglePlayerHud(s: {
+    i: number;
+    lap: number;
+    pos: string;
+    positionColor: string;
+    itemEmoji: string;
+    itemLabel: string;
+    speed: string;
+    speedFill: number;
+    lastLap: string;
+    derbyTopText: string;
+    cpPassed: number;
+    cpTotal: number;
+    nextArrow: number;
+    driftStatus: string;
+    driftFill: number;
+    driftGlow: string;
+    blocks: number;
+    blockDeltaText: string;
+    chainFill: number;
+    pulseOn: boolean;
+    maxBlocks: number;
+    isOut: boolean;
+    bestLap: string;
+    rivalItems: string;
+    survivors: number;
+  }): string {
+    return `
+      <div style="position:absolute;left:14px;top:14px;width:220px;background:linear-gradient(180deg,rgba(16,16,16,0.9),rgba(7,7,7,0.84));border:1px solid #343434;border-radius:8px;padding:8px;box-shadow:0 0 18px rgba(0,0,0,0.5)">
+        <div style="font-size:10px;color:#a8a8a8;margin-bottom:4px;letter-spacing:0.7px">TRACK RADAR</div>
+        <canvas data-minimap="1" width="220" height="126" style="width:100%;height:122px;border:1px solid #2d2d2d;border-radius:6px;background:#090909"></canvas>
+      </div>
+
+      <div style="position:absolute;left:50%;top:14px;transform:translateX(-50%);min-width:340px;max-width:68vw;background:linear-gradient(180deg,rgba(15,15,15,0.92),rgba(7,7,7,0.86));border:1px solid #363636;border-radius:10px;padding:10px 14px;box-shadow:0 0 20px rgba(0,0,0,0.45)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+          <div>
+            <div style="font-size:11px;color:#9a9a9a;letter-spacing:1px">RIDER</div>
+            <div style="font-size:15px;font-weight:bold;color:#fff;letter-spacing:1px">${this.playerNames[s.i]}</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:10px;color:#9b9b9b;letter-spacing:1px">${this.gameMode === 'derby' ? 'MATCH STATUS' : 'RACE PROGRESS'}</div>
+            <div style="font-size:14px;color:#fff;font-weight:bold">${this.gameMode === 'derby' ? s.derbyTopText : `LAP ${s.lap}/${this.totalLaps} · BEST ${s.bestLap}`}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:#9a9a9a;letter-spacing:1px">POSITION</div>
+            <div style="font-size:34px;line-height:0.9;font-weight:900;color:${s.positionColor};text-shadow:0 0 16px ${s.positionColor}">${s.pos}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="position:absolute;right:14px;top:14px;width:180px;background:linear-gradient(180deg,rgba(16,16,16,0.92),rgba(7,7,7,0.86));border:1px solid #363636;border-radius:8px;padding:10px 10px 8px;box-shadow:0 0 18px rgba(0,0,0,0.45)">
+        <div style="font-size:10px;color:#9a9a9a;letter-spacing:1px;margin-bottom:6px">HELD ITEM</div>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="width:58px;height:58px;border-radius:8px;border:1px solid #3a3a3a;background:linear-gradient(180deg,#1a1a1a,#0b0b0b);display:flex;align-items:center;justify-content:center;font-size:26px">${s.itemEmoji}</div>
+          <div style="text-align:right;flex:1;margin-left:8px">
+            <div style="font-size:11px;color:#f2f2f2;font-weight:bold;line-height:1.2">${s.itemLabel}</div>
+            <div style="font-size:10px;color:#9a9a9a;margin-top:4px">RACE ${s.lastLap}</div>
+            <div style="font-size:10px;color:#bebebe;margin-top:2px">${this.gameMode === 'derby' ? `ALIVE ${s.survivors}` : `CP ${s.cpPassed}/${s.cpTotal}`} <span style="display:inline-block;transform:rotate(${s.nextArrow.toFixed(2)}rad);margin-left:4px;color:#fff">▲</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="position:absolute;left:14px;bottom:14px;width:248px;background:linear-gradient(180deg,rgba(16,16,16,0.94),rgba(6,6,6,0.9));border:1px solid #363636;border-radius:10px;padding:10px 12px;box-shadow:0 0 18px rgba(0,0,0,0.45)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="position:relative;width:86px;height:86px;display:flex;align-items:center;justify-content:center">
+            <div style="width:86px;height:86px;border-radius:50%;background:
+              radial-gradient(circle at center, #0a0a0a 36%, transparent 37%),
+              conic-gradient(#f1f1f1 ${s.speedFill * 3.6}deg, #242424 0deg);
+              border:1px solid #343434;">
+            </div>
+            <div style="position:absolute;text-align:center">
+              <div style="font-size:23px;color:#fff;font-weight:bold;line-height:1">${s.speed}</div>
+              <div style="font-size:9px;color:#8d8d8d;letter-spacing:0.7px">KM/H</div>
+            </div>
+          </div>
+          <div style="flex:1">
+            <div style="display:flex;justify-content:space-between;color:#8f8f8f;font-size:10px;margin-bottom:2px">
+              <span>BOOST CHARGE</span><span>${Math.round(s.driftFill)}%</span>
+            </div>
+            <div style="height:6px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:4px;overflow:hidden">
+              <div style="width:${s.driftFill}%;height:100%;background:linear-gradient(90deg,#6c6c6c,#ffffff);box-shadow:0 0 8px ${s.driftGlow}"></div>
+            </div>
+            <div style="margin-top:8px;font-size:11px;color:#afafaf">DRIFT <span style="color:#fff;text-shadow:0 0 8px ${s.driftGlow};font-weight:bold">${s.driftStatus}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="position:absolute;right:14px;bottom:14px;width:280px;background:linear-gradient(180deg,rgba(16,16,16,0.94),rgba(6,6,6,0.9));border:1px solid #363636;border-radius:10px;padding:10px 12px;box-shadow:0 0 18px rgba(0,0,0,0.45)">
+        <div style="display:flex;justify-content:space-between;color:#8f8f8f;font-size:10px;margin-bottom:3px">
+          <span>${this.gameMode === 'derby' ? 'HEALTH' : 'CHAIN'}</span>
+          <span style="color:${s.isOut ? '#b0b0b0' : '#fff'}">${s.isOut ? 'ELIMINATED' : `${s.blocks} BLOCKS ${s.blockDeltaText}`}</span>
+        </div>
+        <div style="height:10px;background:#1a1a1a;border:1px solid #2b2b2b;border-radius:5px;overflow:hidden;position:relative">
+          <div style="width:${s.chainFill}%;height:100%;background:linear-gradient(90deg,#5f5f5f,#d9d9d9)"></div>
+          ${s.pulseOn ? `<div style="position:absolute;inset:0;background:rgba(255,255,255,0.18)"></div>` : ''}
+        </div>
+        <div style="margin-top:7px;display:flex;gap:2px">${this.renderChainPips(s.blocks, s.maxBlocks)}</div>
+      </div>
+
+      <div style="position:absolute;left:50%;bottom:14px;transform:translateX(-50%);max-width:52vw;background:rgba(8,8,8,0.78);border:1px solid #2a2a2a;border-radius:8px;padding:6px 10px;color:#9a9a9a;font-size:10px;line-height:1.2">
+        <span style="color:#d0d0d0">RIVAL ITEMS:</span> ${s.rivalItems}
+      </div>
+    `;
   }
 
   showCountdown(count: number) {
