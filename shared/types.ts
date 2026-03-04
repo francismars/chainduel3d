@@ -29,6 +29,7 @@ export interface RoomMember {
   isHost: boolean;
   slotIndex: number;
   connected: boolean;
+  pingMs?: number;
   disconnectedAt?: number;
   ready: boolean;
   joinedAt: number;
@@ -254,17 +255,25 @@ export interface SetReadyRequest {
   ready: boolean;
 }
 
+export interface SetRoomNameRequest {
+  memberId: string;
+  memberToken: string;
+  name: string;
+}
+
 export type RoomClientMessage =
   | { type: 'room_subscribe'; roomId: string; memberId: string; memberToken: string }
   | { type: 'room_chat_send'; roomId: string; memberId: string; memberToken: string; text: string }
   | { type: 'room_leave'; roomId: string; memberId: string; memberToken: string }
   | { type: 'race_input'; roomId: string; memberId: string; memberToken: string; input: OnlineRaceInput }
+  | { type: 'room_pong'; sentAt: number }
   | { type: 'subscribe'; sessionId: string };
 
 export type RoomServerMessage =
   | { type: 'room_state'; room: RoomState }
   | { type: 'chat_message'; roomId: string; message: ChatMessage }
   | { type: 'race_snapshot'; roomId: string; snapshot: OnlineRaceSnapshot }
+  | { type: 'room_ping'; sentAt: number }
   | { type: 'error'; message: string }
   | { type: 'session_update'; session: GameSession };
 

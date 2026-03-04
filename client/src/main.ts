@@ -299,6 +299,7 @@ class ChainDuel3DApp {
       onSendChat: txt => this.roomClient.sendChat(txt),
       onKick: memberId => this.roomClient.kickMember(memberId),
       onSetReady: ready => this.roomClient.setReady(ready),
+      onSetName: name => this.roomClient.setName(name),
     });
   }
 
