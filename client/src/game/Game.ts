@@ -235,7 +235,7 @@ export class Game {
       this.freeFlyPos[i].copy(this.splitScreen.cameras[i].position);
     }
 
-    this.inputManager = new InputManager();
+    this.inputManager = new InputManager(this.container);
     this.itemSystem = new ItemSystem(this.scene, this.route.itemBoxPositions);
     this.itemSystem.setLocalAuthorityEnabled(!this.online?.enabled);
     const minimapPath = this.route.routePoints
@@ -1670,6 +1670,7 @@ export class Game {
       this.onlineRosterEl = null;
     }
     this.hud.dispose();
+    this.inputManager.dispose();
     this.itemSystem.dispose();
     this.splitScreen.dispose();
   }
