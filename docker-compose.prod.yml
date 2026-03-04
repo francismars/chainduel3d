@@ -28,6 +28,8 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+    volumes:
+      - ./server/data:/app/server/dist/server/data
     expose:
       - "3000"
     healthcheck:
