@@ -16,6 +16,7 @@ type RoomActions = {
   onSendChat: (text: string) => void;
   onKick: (memberId: string) => void | Promise<void>;
   onSetReady: (ready: boolean) => void | Promise<void>;
+  onSetName: (name: string) => void | Promise<void>;
 };
 
 export class OnlineLobbyUI {
@@ -169,7 +170,8 @@ export class OnlineLobbyUI {
           label.innerHTML = `${slot}: ${m.name}${hostText}${readyText} <span style="color:#f3bf78;animation:offlinePulse 1.2s ease-in-out infinite">[OFFLINE ${seconds}s]</span>`;
         } else {
           const readyText = m.ready ? ' [READY]' : '';
-          label.textContent = `${slot}: ${m.name}${hostText}${readyText}${m.connected ? '' : ' [OFFLINE]'}`;
+          const pingText = m.connected && typeof m.pingMs === 'number' ? ` [${Math.round(m.pingMs)}ms]` : '';
+          label.textContent = `${slot}: ${m.name}${hostText}${readyText}${m.connected ? pingText : ' [OFFLINE]'}`;
         }
         row.appendChild(label);
         if (isHost && room.phase === 'lobby' && m.memberId !== meId && !m.isHost) {
@@ -195,6 +197,43 @@ export class OnlineLobbyUI {
     renderRoster();
     this.rosterTimerId = setInterval(renderRoster, 1000);
     left.appendChild(roster);
+
+    if (room.phase === 'lobby' && me) {
+      const nameRow = document.createElement('div');
+      nameRow.style.cssText = 'display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:10px;';
+      const nameInput = document.createElement('input');
+      nameInput.placeholder = 'Your name';
+      nameInput.value = me.name;
+      nameInput.maxLength = 24;
+      nameInput.style.cssText = this.inputCss();
+      nameRow.appendChild(nameInput);
+      const saveNameBtn = document.createElement('button');
+      saveNameBtn.textContent = 'UPDATE NAME';
+      saveNameBtn.style.cssText = this.btnCss(false);
+      const saveName = async () => {
+        const next = nameInput.value.trim();
+        if (!next) {
+          this.setStatus('Name cannot be empty');
+          return;
+        }
+        if (next === me.name) {
+          this.setStatus('Name unchanged');
+          return;
+        }
+        try {
+          await actions.onSetName(next);
+          this.setStatus('Name updated');
+        } catch (err: any) {
+          this.setStatus(err?.message ?? 'Failed to update name');
+        }
+      };
+      saveNameBtn.onclick = () => void saveName();
+      nameInput.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') void saveName();
+      });
+      nameRow.appendChild(saveNameBtn);
+      left.appendChild(this.labelWrap('YOUR NAME', nameRow));
+    }
 
     const classes = room.settings.chainClasses ?? ['balanced', 'balanced', 'balanced', 'balanced'];
     if (isHost) {

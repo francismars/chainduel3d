@@ -46,6 +46,7 @@ export interface RoomMember {
   isHost: boolean;
   slotIndex: number;
   connected: boolean;
+  pingMs?: number;
   disconnectedAt?: number;
   ready: boolean;
   joinedAt: number;
@@ -150,6 +151,7 @@ interface CreateRoomRequest {
 
 interface InternalMember extends RoomMember {
   token: string;
+  pingMs?: number;
   disconnectedAt?: number;
 }
 
@@ -303,10 +305,11 @@ export class RoomManager {
       members: [{
         memberId,
         token: memberToken,
-        name: (req.hostName || 'Host').slice(0, 24),
+        name: this.sanitizeMemberName(req.hostName, 'Host'),
         isHost: true,
         slotIndex: req.spectatorHost ? -1 : 0,
         connected: true,
+        pingMs: undefined,
         ready: true,
         joinedAt: now,
       }],
@@ -336,10 +339,11 @@ export class RoomManager {
     room.members.push({
       memberId,
       token: memberToken,
-      name: (name || `Player ${room.members.length + 1}`).slice(0, 24),
+      name: this.sanitizeMemberName(name, `Player ${room.members.length + 1}`),
       isHost: false,
       slotIndex,
       connected: true,
+      pingMs: undefined,
       ready: false,
       joinedAt: Date.now(),
     });
@@ -375,6 +379,15 @@ export class RoomManager {
     if (!member) throw new Error('Member not found');
     if (member.isHost) throw new Error('Host does not use ready status');
     member.ready = !!ready;
+    return this.toState(room);
+  }
+
+  setMemberName(roomId: string, memberId: string, token: string, name: string): RoomState {
+    const room = this.getInternalValidated(roomId, memberId, token);
+    if (room.phase !== 'lobby') throw new Error('Cannot change name after race start');
+    const member = room.members.find(m => m.memberId === memberId);
+    if (!member) throw new Error('Member not found');
+    member.name = this.sanitizeMemberName(name, member.name || 'Player');
     return this.toState(room);
   }
 
@@ -496,6 +509,7 @@ export class RoomManager {
     const m = room.members.find(x => x.memberId === memberId);
     if (m) {
       m.connected = false;
+      m.pingMs = undefined;
       m.disconnectedAt = Date.now();
     }
   }
@@ -506,8 +520,18 @@ export class RoomManager {
     const m = room.members.find(x => x.memberId === memberId);
     if (m) {
       m.connected = true;
+      m.pingMs = undefined;
       m.disconnectedAt = undefined;
     }
+  }
+
+  setMemberPing(roomId: string, memberId: string, pingMs: number): RoomState | null {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+    const member = room.members.find(m => m.memberId === memberId);
+    if (!member) return null;
+    member.pingMs = Math.max(0, Math.min(5000, Math.round(pingMs)));
+    return this.toState(room);
   }
 
   pruneDisconnectedLobbyMembers(graceMs = this.disconnectGraceMs): string[] {
@@ -669,6 +693,7 @@ export class RoomManager {
         isHost: m.memberId === room.hostMemberId,
         slotIndex: m.slotIndex,
         connected: m.connected,
+        pingMs: m.pingMs,
         disconnectedAt: m.disconnectedAt,
         ready: m.ready,
         joinedAt: m.joinedAt,
@@ -1014,6 +1039,13 @@ export class RoomManager {
 
   private sanitizeMode(input: unknown): GameMode {
     return input === 'derby' ? 'derby' : 'classic';
+  }
+
+  private sanitizeMemberName(input: unknown, fallback: string): string {
+    const raw = typeof input === 'string' ? input : '';
+    const trimmed = raw.trim().slice(0, 24);
+    if (trimmed) return trimmed;
+    return (fallback || 'Player').trim().slice(0, 24) || 'Player';
   }
 
   private getModeMaxBlocks(mode: GameMode): number {

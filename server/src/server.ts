@@ -10,7 +10,17 @@ import { EscrowManager } from './escrow.js';
 import { RoomManager } from './room.js';
 import { RaceAuthority } from './race-authority.js';
 import { RouteCatalog } from './routes.js';
-import type { ChainClass, GameMode, RoomClientMessage, RoomServerMessage, StartRoomRequest, RouteCustomLayout, KickRoomMemberRequest, SetReadyRequest } from '../../shared/types';
+import type {
+  ChainClass,
+  GameMode,
+  RoomClientMessage,
+  RoomServerMessage,
+  StartRoomRequest,
+  RouteCustomLayout,
+  KickRoomMemberRequest,
+  SetReadyRequest,
+  SetRoomNameRequest,
+} from '../../shared/types';
 
 type JoinRoomRequest = { code: string; name: string };
 
@@ -269,6 +279,22 @@ app.post('/api/rooms/:roomId/ready', (req, res) => {
   }
 });
 
+app.post('/api/rooms/:roomId/name', (req, res) => {
+  try {
+    const body = req.body as SetRoomNameRequest;
+    const room = rooms.setMemberName(
+      req.params.roomId,
+      body.memberId,
+      body.memberToken,
+      body.name,
+    );
+    broadcastRoomState(room.roomId);
+    res.json({ room });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Name update failed' });
+  }
+});
+
 app.post('/api/rooms/:roomId/rematch', (req, res) => {
   try {
     const body = req.body as StartRoomRequest;
@@ -370,6 +396,7 @@ const raceAuthority = new RaceAuthority(rooms, (roomId, race) => {
 raceAuthority.start();
 
 const wsRoom = new Map<WebSocket, { roomId: string; memberId: string; memberToken: string }>();
+const wsPingSentAt = new Map<WebSocket, number>();
 
 wss.on('connection', (ws: WebSocket) => {
   ws.on('message', (data: Buffer) => {
@@ -404,6 +431,19 @@ wss.on('connection', (ws: WebSocket) => {
       if (msg.type === 'room_leave') {
         const room = rooms.leave(msg.roomId, msg.memberId, msg.memberToken);
         wsRoom.delete(ws);
+        wsPingSentAt.delete(ws);
+        if (room) broadcastRoomState(room.roomId);
+        return;
+      }
+
+      if (msg.type === 'room_pong') {
+        const sub = wsRoom.get(ws);
+        if (!sub) return;
+        const sentAt = wsPingSentAt.get(ws);
+        if (!sentAt) return;
+        wsPingSentAt.delete(ws);
+        const pingMs = Date.now() - sentAt;
+        const room = rooms.setMemberPing(sub.roomId, sub.memberId, pingMs);
         if (room) broadcastRoomState(room.roomId);
         return;
       }
@@ -417,6 +457,7 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('close', () => {
     const sub = wsRoom.get(ws);
+    wsPingSentAt.delete(ws);
     if (!sub) return;
     rooms.markDisconnected(sub.roomId, sub.memberId);
     wsRoom.delete(ws);
@@ -445,6 +486,17 @@ const lobbyDisconnectCleanupInterval = setInterval(() => {
   }
 }, 5000);
 
+const pingProbeInterval = setInterval(() => {
+  const now = Date.now();
+  wss.clients.forEach(client => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    const sub = wsRoom.get(client);
+    if (!sub) return;
+    wsPingSentAt.set(client, now);
+    send(client, { type: 'room_ping', sentAt: now });
+  });
+}, 3000);
+
 function send(ws: WebSocket, payload: RoomServerMessage) {
   if (ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify(payload));
@@ -471,6 +523,7 @@ function evictRoomMemberConnections(roomId: string, memberId: string, message: s
     if (sub.roomId !== roomId || sub.memberId !== memberId) return;
     send(client, { type: 'error', message });
     wsRoom.delete(client);
+    wsPingSentAt.delete(client);
     try {
       client.close(4001, 'kicked');
     } catch {
@@ -514,6 +567,7 @@ function shutdown(signal: string) {
   console.log(`[shutdown] Received ${signal}, draining server...`);
   clearInterval(sessionBroadcastInterval);
   clearInterval(lobbyDisconnectCleanupInterval);
+  clearInterval(pingProbeInterval);
   raceAuthority.stop();
   wss.clients.forEach((client) => {
     try {

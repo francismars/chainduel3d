@@ -156,6 +156,23 @@ export class RoomClient {
     }
   }
 
+  async setName(name: string) {
+    const id = this.getRequiredIdentity();
+    const res = await fetch(`/api/rooms/${id.roomId}/name`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: id.memberId,
+        memberToken: id.memberToken,
+        name,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to update name' }));
+      throw new Error(err.error ?? 'Failed to update name');
+    }
+  }
+
   async rematch() {
     const id = this.getRequiredIdentity();
     const res = await fetch(`/api/rooms/${id.roomId}/rematch`, {
@@ -241,6 +258,10 @@ export class RoomClient {
       ws.onmessage = ev => {
         try {
           const msg = JSON.parse(ev.data) as RoomServerMessage;
+          if (msg.type === 'room_ping') {
+            this.send({ type: 'room_pong', sentAt: msg.sentAt });
+            return;
+          }
           if (msg.type === 'room_state') this.handlers.onRoomState?.(msg.room);
           else if (msg.type === 'chat_message') this.handlers.onChatMessage?.(msg.roomId, msg.message);
           else if (msg.type === 'race_snapshot') this.handlers.onRaceSnapshot?.(msg.roomId, msg.snapshot);
