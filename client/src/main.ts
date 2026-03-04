@@ -93,7 +93,7 @@ const loadSponsorPreviewRows = async (): Promise<SponsorPreviewRow[]> => {
   return rows;
 };
 
-type AppState = 'mode' | 'lobby' | 'online_entry' | 'online_room' | 'admin' | 'payment' | 'racing' | 'result';
+type AppState = 'mode' | 'lobby' | 'online_entry' | 'online_room' | 'admin' | 'how_to_play' | 'payment' | 'racing' | 'result';
 type RouteOption = { id: string; name: string };
 
 class ChainDuel3DApp {
@@ -209,6 +209,11 @@ class ChainDuel3DApp {
     adminBtn.style.cssText = this.modeBtnCss(false);
     adminBtn.onclick = () => this.showAdminMenu();
     card.appendChild(adminBtn);
+    const howBtn = document.createElement('button');
+    howBtn.textContent = 'HOW TO PLAY';
+    howBtn.style.cssText = this.modeBtnCss(false);
+    howBtn.onclick = () => this.showHowToPlay();
+    card.appendChild(howBtn);
     const style = document.createElement('style');
     style.textContent = `
       @keyframes pulse {
@@ -235,6 +240,76 @@ class ChainDuel3DApp {
       font-size:18px;letter-spacing:1px;font-family:${UI_FONT_FAMILY};
       transition:transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease;
     `;
+  }
+
+  private showHowToPlay() {
+    this.state = 'how_to_play';
+    this.container.innerHTML = '';
+    const compactLayout = window.innerHeight < 860;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `
+      width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:${compactLayout ? 'flex-start' : 'center'};
+      background:radial-gradient(circle at center,#080808 0%,#000 70%);
+      color:#f0f0f0;font-family:${UI_FONT_FAMILY}; overflow:auto;
+      padding:${compactLayout ? '10px 10px 14px' : '18px 14px 22px'}; box-sizing:border-box;
+    `;
+    const card = document.createElement('div');
+    card.style.cssText = `
+      width:min(760px,96vw);background:#090909;border:1px solid #2b2b2b;border-radius:10px;
+      padding:${compactLayout ? '14px' : '22px'};box-shadow:0 0 24px rgba(255,255,255,0.08);
+    `;
+    wrap.appendChild(card);
+
+    const title = document.createElement('div');
+    title.textContent = 'HOW TO PLAY';
+    title.style.cssText = `font-size:clamp(20px,4.6vw,30px);letter-spacing:2px;color:#fff;margin-bottom:${compactLayout ? '10px' : '14px'};`;
+    card.appendChild(title);
+
+    const content = document.createElement('div');
+    content.style.cssText = `
+      display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;
+      font-size:13px;line-height:1.5;color:#d7d7d7;
+    `;
+    const section = (heading: string, body: string) => {
+      const box = document.createElement('div');
+      box.style.cssText = 'border:1px solid #2b2b2b;border-radius:8px;padding:10px 12px;background:#0d0d0d;';
+      box.innerHTML = `<div style="color:#fff;letter-spacing:1px;font-size:12px;margin-bottom:6px">${heading}</div><div>${body}</div>`;
+      return box;
+    };
+    content.appendChild(section(
+      'OBJECTIVE',
+      'Classic: finish laps as fast as possible.<br/>Derby: survive and build chain advantage while opponents are eliminated.',
+    ));
+    content.appendChild(section(
+      'CONTROLS',
+      'P1: W/A/S/D + Drift + Space (item)<br/>P2: Arrows + Drift + Enter (item)<br/>Look back is available in-race; use it for awareness.',
+    ));
+    content.appendChild(section(
+      'ITEMS',
+      'Lightning Turbo: short speed burst.<br/>Mempool Mine: drop hazard behind.<br/>Fee Spike: slow nearest rival.<br/>Sats Siphon: steal 1 chain block.<br/>Nostr Zapwave: short-range area slow.',
+    ));
+    content.appendChild(section(
+      'CHAIN BASICS',
+      'Your chain is your health/power resource. Losing all blocks eliminates you. Some abilities trade or steal blocks, so pick item timing carefully.',
+    ));
+    content.appendChild(section(
+      'RACE TIPS',
+      'Use drift to build boosts for exits.<br/>Take item gates with side-by-side boxes when racing in packs.<br/>Save disruptive items for tight clusters.',
+    ));
+    content.appendChild(section(
+      'MODES',
+      'Local: split-screen with AI/humans.<br/>Online: room-based races with host settings and rematches.<br/>Admin: route tools and layout publishing.',
+    ));
+    card.appendChild(content);
+
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'BACK';
+    backBtn.style.cssText = this.backBtnCss();
+    backBtn.onclick = () => this.showModeMenu();
+    card.appendChild(backBtn);
+
+    this.decorateInteractiveElements(card);
+    this.container.appendChild(wrap);
   }
 
   private showLobby() {
