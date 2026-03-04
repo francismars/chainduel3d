@@ -12,14 +12,9 @@ import { PaymentUI } from './lobby/PaymentUI';
 import { ResultUI } from './lobby/ResultUI';
 import { ChatMessage, GAME_CONFIG, GameMode, OnlineRaceSnapshot, RaceItemStats, RoomState, RouteCustomLayout, RouteDefinition } from 'shared/types';
 import { RoomClient } from './online/RoomClient';
+import { setupPWA } from './pwa';
 
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      // PWA registration is optional during local/dev flows.
-    });
-  });
-}
+setupPWA();
 
 const SPONSOR_LOGO_IMPORTS = import.meta.glob('./assets/sponsors/*.{png,jpg,jpeg,webp,svg}', {
   eager: true,
