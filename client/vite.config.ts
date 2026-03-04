@@ -24,6 +24,11 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['pwa-icon.svg', 'pwa-maskable.svg'],
+        workbox: {
+          clientsClaim: true,
+          skipWaiting: true,
+          cleanupOutdatedCaches: true,
+        },
         manifest: {
           id: '/',
           name: 'CHAINDUEL3D',
