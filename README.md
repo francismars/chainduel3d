@@ -1,69 +1,183 @@
 # CHAINDUEL3D
 
-A browser-based 3D chain duel game with Anatomy of Bitcoin visual aesthetics and Lightning Network sat wagering.
+Browser-based 3D racing with Bitcoin-themed visuals, optional Lightning wagers, online rooms, and route authoring tools.
 
-## Quick Start
+## Feature Overview
+
+- Local play with up to 4 riders (human + AI), chain class selection, laps, route, and mode (`classic` or `derby`)
+- Practice mode (no sats required)
+- Online rooms: create/join by code, ready checks, host controls, chat, rematch flow
+- Optional Lightning wager flow backed by LNBits invoices/payouts
+- Public route catalog plus admin route CRUD APIs
+- Real-time room/race synchronization over WebSocket (`/ws`)
+
+## Architecture At A Glance
+
+- `client`: Vite + TypeScript SPA (Three.js + cannon-es), state-driven screens (no URL router)
+- `server`: Express REST API + `ws` realtime gateway
+- `shared`: shared TypeScript types between client/server
+- Payments: LNBits integration (with safe fallback behavior when unavailable)
+
+## Local Development
+
+### Quick start (full stack)
 
 ```bash
 npm install
 npm run dev
 ```
 
-This starts both the Vite dev server (port 5173) and the backend (port 3000).
+This runs:
+- client dev server on `http://localhost:5173`
+- backend on `http://localhost:3000`
 
-Open `http://localhost:5173` in your browser.
+### Workspace commands
 
-### Practice Mode
+```bash
+# root
+npm run build
 
-Click **Practice Mode** on the lobby screen to race without sats. No backend or LNBits configuration needed.
+# client
+npm run dev --workspace=client
+npm run build --workspace=client
+npm run preview --workspace=client
 
-### With Lightning Payments
+# server
+npm run dev --workspace=server
+npm run build --workspace=server
+npm run start --workspace=server
+```
 
-1. Copy `server/.env.example` to `server/.env`
-2. Set `ROUTE_ADMIN_SECRET` (required for admin route APIs)
-3. Fill in your LNBits credentials
-4. Start the game and click **Start Chain Duel** — QR codes will be generated for both players to deposit sats
+## Environment Configuration
 
-### Admin Route APIs
+### Server (`server/.env`)
 
-- Admin endpoints under `/api/admin/routes/*` require header `x-admin-secret`.
-- The header value must match `ROUTE_ADMIN_SECRET` from `server/.env`.
+Create `server/.env` from the example:
+
+```bash
+cp server/.env.example server/.env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item server/.env.example server/.env
+```
+
+Variables:
+- `NODE_ENV` (`development` or `production`)
+- `PORT` (server port, default `3000`)
+- `ROUTE_ADMIN_SECRET` (required for `/api/admin/routes/*`)
+- `LNBITS_URL`
+- `LNBITS_ADMIN_KEY`
+- `LNBITS_INVOICE_KEY`
+- `REVENUE_SPLIT_PERCENT`
+
+Production startup enforces required env vars and exits if missing.
+
+### Client dev proxy (optional)
+
+- `VITE_BACKEND_PORT` can override backend port for Vite proxying `/api` and `/ws` (default `3000`).
+
+## Gameplay And Online Flow
+
+- App modes include local, online entry, online room, admin, payment, racing, and results.
+- Invite links support `?room=<CODE>` to prefill online join.
+- If Lightning session creation fails, gameplay still continues with fallback behavior.
+
+## API And Realtime Overview
+
+### REST endpoints
+
+- `GET /health`
+- Sessions:
+  - `POST /api/sessions`
+  - `GET /api/sessions/:id`
+  - `POST /api/sessions/:id/result`
+- Rooms:
+  - `POST /api/rooms`
+  - `POST /api/rooms/join`
+  - `GET /api/rooms/:roomId`
+  - `POST /api/rooms/:roomId/settings`
+  - `POST /api/rooms/:roomId/start`
+  - `POST /api/rooms/:roomId/kick`
+  - `POST /api/rooms/:roomId/ready`
+  - `POST /api/rooms/:roomId/rematch`
+- Routes:
+  - `GET /api/routes`
+  - `GET /api/routes/:routeId`
+- Admin routes (requires `ROUTE_ADMIN_SECRET` via `x-admin-secret` or bearer token):
+  - `POST /api/admin/routes`
+  - `PUT /api/admin/routes/:routeId`
+  - `DELETE /api/admin/routes/:routeId`
+
+### WebSocket (`/ws`)
+
+Client messages include:
+- `subscribe` (session updates)
+- `room_subscribe`
+- `room_chat_send`
+- `room_leave`
+- `race_input`
+
+Server messages include:
+- `session_update`
+- `room_state`
+- `chat_message`
+- `race_snapshot`
+- `error`
 
 ## Controls
 
-| Action    | Player 1         | Player 2          |
-|-----------|------------------|--------------------|
-| Accelerate | W               | Arrow Up           |
-| Brake      | S               | Arrow Down         |
-| Steer Left | A               | Arrow Left         |
-| Steer Right| D               | Arrow Right        |
-| Use Item   | Space           | Enter              |
-| Look Back  | Q               | Right Shift        |
+| Action      | Player 1 | Player 2     |
+|-------------|----------|--------------|
+| Accelerate  | W        | Arrow Up     |
+| Brake       | S        | Arrow Down   |
+| Steer Left  | A        | Arrow Left   |
+| Steer Right | D        | Arrow Right  |
+| Use Item    | Space    | Enter        |
+| Look Back   | Q        | Right Shift  |
 
 ## Items
 
-- **Double Spend** — Speed boost
-- **Fork Bomb** — Drops obstacle on route
-- **Lightning Bolt** — Slows opponent
+- `Double Spend`: speed boost
+- `Fork Bomb`: drops an obstacle on route
+- `Lightning Bolt`: slows opponent
 
-## Tech Stack
+## Testing
 
-- Three.js + cannon-es (3D rendering + physics)
-- Vite + TypeScript
-- Node.js + Express (backend)
-- LNBits API (Lightning Network payments)
+```bash
+# game/physics and integration parity checks
+npm run test:parity --workspace=server
+
+# API smoke checks against a running deployment
+SMOKE_BASE_URL=https://your-host SMOKE_ADMIN_SECRET=your_secret npm run test:smoke --workspace=server
+```
+
+## Deployment
+
+Production deployment is single-VM with Docker Compose + Nginx + GHCR images.
+
+- CI workflow builds workspace and runs parity tests
+- deploy workflow builds/pushes client/server images tagged by commit SHA
+- staging deploy happens first
+- production deploy promotes the same image SHA after approval
+
+Use the full runbook for setup, TLS bootstrap, staging verification, monitoring, and rollback:
+- `docs/production-runbook.md`
+
+## Operational Notes
+
+- Room/session runtime state is in-memory and is lost on server restart.
+- Route catalog is file-backed under `server/data/routes.json`; ensure persistent volume/backup strategy in production.
+- If `ROUTE_ADMIN_SECRET` is unset, admin route APIs are effectively disabled.
 
 ## Project Structure
 
+```text
+blockkart/
+  client/   # Browser game (Vite + Three.js)
+  server/   # Express API + WebSocket + LNBits integration
+  shared/   # Shared TypeScript types
+  docs/     # Runbooks and operational docs
 ```
-chainduel3d/
-  client/          # Browser game (Three.js)
-  server/          # Backend (Express + LNBits)
-  shared/          # Shared TypeScript types
-```
-
-## Production Deployment
-
-Single-VM production deployment artifacts (Docker, Nginx, CI/CD, staging checks, rollback) are documented in:
-
-- `docs/production-runbook.md`
