@@ -13,6 +13,7 @@ type Handlers = {
   onRoomState?: (room: RoomState) => void;
   onChatMessage?: (roomId: string, msg: ChatMessage) => void;
   onRaceSnapshot?: (roomId: string, snapshot: OnlineRaceSnapshot) => void;
+  onMemberPing?: (roomId: string, memberId: string, pingMs: number) => void;
   onError?: (message: string) => void;
 };
 
@@ -265,6 +266,7 @@ export class RoomClient {
           if (msg.type === 'room_state') this.handlers.onRoomState?.(msg.room);
           else if (msg.type === 'chat_message') this.handlers.onChatMessage?.(msg.roomId, msg.message);
           else if (msg.type === 'race_snapshot') this.handlers.onRaceSnapshot?.(msg.roomId, msg.snapshot);
+          else if (msg.type === 'room_member_ping') this.handlers.onMemberPing?.(msg.roomId, msg.memberId, msg.pingMs);
           else if (msg.type === 'error') this.handlers.onError?.(msg.message);
         } catch {
           // ignore malformed ws payloads

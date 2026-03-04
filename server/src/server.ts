@@ -444,7 +444,14 @@ wss.on('connection', (ws: WebSocket) => {
         wsPingSentAt.delete(ws);
         const pingMs = Date.now() - sentAt;
         const room = rooms.setMemberPing(sub.roomId, sub.memberId, pingMs);
-        if (room) broadcastRoomState(room.roomId);
+        if (room) {
+          broadcastToRoom(room.roomId, {
+            type: 'room_member_ping',
+            roomId: room.roomId,
+            memberId: sub.memberId,
+            pingMs,
+          });
+        }
         return;
       }
 
