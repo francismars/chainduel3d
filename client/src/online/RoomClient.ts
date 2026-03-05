@@ -15,6 +15,7 @@ type Handlers = {
   onChatMessage?: (roomId: string, msg: ChatMessage) => void;
   onRaceSnapshot?: (roomId: string, snapshot: OnlineRaceSnapshot) => void;
   onMemberPing?: (roomId: string, memberId: string, pingMs: number) => void;
+  onConnectionState?: (state: 'connecting' | 'connected' | 'subscribing' | 'subscribed' | 'reconnecting') => void;
   onError?: (message: string) => void;
 };
 
@@ -75,8 +76,11 @@ export class RoomClient {
     if (!res.ok) throw new Error('Failed to create room');
     const data = await res.json();
     this.setIdentity(data.room.roomId, data.memberId, data.memberToken);
+    this.handlers.onConnectionState?.('connecting');
     await this.ensureSocket();
+    this.handlers.onConnectionState?.('subscribing');
     this.subscribe();
+    this.handlers.onConnectionState?.('subscribed');
     return data as { room: RoomState; memberId: string; memberToken: string };
   }
 
@@ -92,12 +96,15 @@ export class RoomClient {
     }
     const data = await res.json();
     this.setIdentity(data.room.roomId, data.memberId, data.memberToken);
+    this.handlers.onConnectionState?.('connecting');
     await this.ensureSocket();
+    this.handlers.onConnectionState?.('subscribing');
     this.subscribe();
+    this.handlers.onConnectionState?.('subscribed');
     return data as { room: RoomState; memberId: string; memberToken: string };
   }
 
-  async patchSettings(settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; routeId: string; mode: GameMode }>) {
+  async patchSettings(settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; routeId: string; mode: GameMode; wager: any }>) {
     const id = this.getRequiredIdentity();
     await fetch(`/api/rooms/${id.roomId}/settings`, {
       method: 'POST',
@@ -197,6 +204,86 @@ export class RoomClient {
     return data as { room: RoomState };
   }
 
+  async getSettlement() {
+    const id = this.getRequiredIdentity();
+    const params = new URLSearchParams({
+      memberId: id.memberId,
+      memberToken: id.memberToken,
+    });
+    const res = await fetch(`/api/rooms/${id.roomId}/settlement?${params.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to load settlement' }));
+      throw new Error(err.error ?? 'Failed to load settlement');
+    }
+    return res.json() as Promise<{ settlement: any }>;
+  }
+
+  async createClaimTicket() {
+    const id = this.getRequiredIdentity();
+    const res = await fetch(`/api/rooms/${id.roomId}/settlement/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: id.memberId,
+        memberToken: id.memberToken,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to create claim' }));
+      throw new Error(err.error ?? 'Failed to create claim');
+    }
+    return res.json() as Promise<{ claimToken: string; amountSat: number }>;
+  }
+
+  async createDepositInvoice() {
+    const id = this.getRequiredIdentity();
+    const res = await fetch(`/api/rooms/${id.roomId}/deposits/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: id.memberId,
+        memberToken: id.memberToken,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to create deposit invoice' }));
+      throw new Error(err.error ?? 'Failed to create deposit invoice');
+    }
+    return res.json() as Promise<{ invoice: { paymentHash: string; bolt11: string; amountSat: number; paid: boolean } }>;
+  }
+
+  async getDepositStatus() {
+    const id = this.getRequiredIdentity();
+    const params = new URLSearchParams({
+      memberId: id.memberId,
+      memberToken: id.memberToken,
+    });
+    const res = await fetch(`/api/rooms/${id.roomId}/deposits/status?${params.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to fetch deposits status' }));
+      throw new Error(err.error ?? 'Failed to fetch deposits status');
+    }
+    return res.json() as Promise<{ deposits: Array<{ memberId: string; amountSat: number; paid: boolean }> }>;
+  }
+
+  async redeemClaimTicket(claimToken: string) {
+    const id = this.getRequiredIdentity();
+    const res = await fetch(`/api/rooms/${id.roomId}/settlement/withdraw`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: id.memberId,
+        memberToken: id.memberToken,
+        claimToken,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to withdraw payout' }));
+      throw new Error(err.error ?? 'Failed to withdraw payout');
+    }
+    return res.json() as Promise<{ lnurl: string | null; amount: number }>;
+  }
+
   sendChat(text: string) {
     if (!text.trim()) return;
     const id = this.getRequiredIdentity();
@@ -262,6 +349,7 @@ export class RoomClient {
       ws.onopen = () => {
         this.wsReady = true;
         this.reconnectAttempts = 0;
+        this.handlers.onConnectionState?.('connected');
         resolve();
       };
       ws.onerror = () => reject(new Error('WebSocket connection failed'));
@@ -298,11 +386,15 @@ export class RoomClient {
     if (this.reconnectTimer != null) return;
     const delayMs = Math.min(5000, 500 * Math.max(1, this.reconnectAttempts + 1));
     this.reconnectAttempts += 1;
+    this.handlers.onConnectionState?.('reconnecting');
     this.reconnectTimer = window.setTimeout(async () => {
       this.reconnectTimer = null;
       try {
+        this.handlers.onConnectionState?.('connecting');
         await this.ensureSocket();
+        this.handlers.onConnectionState?.('subscribing');
         this.subscribe();
+        this.handlers.onConnectionState?.('subscribed');
       } catch {
         this.scheduleReconnect();
       }

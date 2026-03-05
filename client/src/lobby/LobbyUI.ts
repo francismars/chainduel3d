@@ -183,6 +183,7 @@ export class LobbyUI {
     modeSelect.innerHTML = `
       <option value="classic" selected>CLASSIC RACE</option>
       <option value="derby">DERBY MODE</option>
+      <option value="capture_sats">CAPTURE SATS</option>
     `;
     const modeWrap = document.createElement('div');
     modeWrap.style.cssText = 'margin-bottom: 14px;';
@@ -206,18 +207,6 @@ export class LobbyUI {
     `;
     raceBtn.onclick = () => this.handleStart(false);
     form.appendChild(raceBtn);
-
-    // Practice button (skip payment)
-    const practiceBtn = document.createElement('button');
-    practiceBtn.textContent = 'PRACTICE MODE (no sats)';
-    practiceBtn.style.cssText = `
-      width: 100%; padding: ${compactLayout ? '8px' : '10px'}; margin-top: ${compactLayout ? '8px' : '12px'};
-      background: transparent; border: 1px solid #333;
-      border-radius: 4px; color: #666; font-family: 'Courier New', monospace;
-      font-size: 13px; cursor: pointer;
-    `;
-    practiceBtn.onclick = () => this.handleStart(true);
-    form.appendChild(practiceBtn);
 
     const watchAiBtn = document.createElement('button');
     watchAiBtn.textContent = 'WATCH AI MATCH (LOCAL)';
@@ -320,7 +309,7 @@ export class LobbyUI {
     const extraAi = Math.max(0, Math.min(4, Number.isFinite(extraAiRaw) ? extraAiRaw : 0));
     const routeId = (document.getElementById('route_id') as HTMLSelectElement)?.value || 'default';
     const modeRaw = (document.getElementById('game_mode') as HTMLSelectElement)?.value;
-    const mode: GameMode = modeRaw === 'derby' ? 'derby' : 'classic';
+    const mode: GameMode = modeRaw === 'derby' ? 'derby' : modeRaw === 'capture_sats' ? 'capture_sats' : 'classic';
     const names: string[] = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, (_, i) => `Player ${i + 1}`);
     const isAI: boolean[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill(true);
     const chainClasses: ChainClass[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill('balanced');
@@ -351,7 +340,7 @@ export class LobbyUI {
     const activeSlots: boolean[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill(true);
     const routeId = (document.getElementById('route_id') as HTMLSelectElement)?.value || 'default';
     const modeRaw = (document.getElementById('game_mode') as HTMLSelectElement)?.value;
-    const mode: GameMode = modeRaw === 'derby' ? 'derby' : 'classic';
+    const mode: GameMode = modeRaw === 'derby' ? 'derby' : modeRaw === 'capture_sats' ? 'capture_sats' : 'classic';
     this.onStart(names, isAI, chainClasses, activeSlots, GAME_CONFIG.MIN_WAGER, clampedLaps, true, routeId, mode);
   }
 

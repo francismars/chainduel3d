@@ -12,11 +12,21 @@ export interface GameSession {
 }
 
 export type PlayMode = 'local' | 'online';
-export type GameMode = 'classic' | 'derby';
+export type GameMode = 'classic' | 'derby' | 'capture_sats';
 export type ChainClass = 'balanced' | 'light' | 'heavy';
 export type RoomId = string;
 export type RoomCode = string;
 export type RoomPhase = 'lobby' | 'countdown' | 'racing' | 'finished';
+export type WagerMode = 'for_keeps' | 'capture_sats';
+
+export interface WagerSettings {
+  enabled: boolean;
+  practiceOnly?: boolean;
+  amountSat: number;
+  mode: WagerMode;
+  winnerCount: 1 | 2 | 3;
+  rankWeights: number[];
+}
 
 export interface RoomSettings {
   laps: number;
@@ -25,6 +35,7 @@ export interface RoomSettings {
   chainClasses: ChainClass[];
   routeId: string;
   mode?: GameMode;
+  wager?: WagerSettings;
 }
 
 export interface RoomMember {
@@ -110,7 +121,28 @@ export interface RoomRaceState {
   routeLayout?: RouteCustomLayout | null;
   mode?: GameMode;
   standings?: RaceStandings;
+  captureSatsByPlayer?: number[];
+  satsRemaining?: number;
+  settlement?: RoomSettlementSummary;
   finishedAt?: number;
+}
+
+export interface RoomSettlementShare {
+  memberId: string;
+  slotIndex: number;
+  playerName: string;
+  amountSat: number;
+  reason: 'rank' | 'capture';
+}
+
+export interface RoomSettlementSummary {
+  roomId: string;
+  mode: WagerMode;
+  totalPotSat: number;
+  feeSat: number;
+  distributableSat: number;
+  createdAt: number;
+  shares: RoomSettlementShare[];
 }
 
 export interface RouteDefinition {
@@ -190,6 +222,8 @@ export interface OnlineRaceSnapshot {
   obstacles?: OnlineObstacleState[];
   mode?: GameMode;
   standings?: RaceStandings;
+  captureSatsByPlayer?: number[];
+  satsRemaining?: number;
   events?: OnlineRaceEvent[];
   at: number;
 }
@@ -325,6 +359,12 @@ export interface RaceResultRequest {
 export interface PayoutResponse {
   lnurl: string | null;
   amount: number;
+}
+
+export interface ClaimPayoutResponse {
+  lnurl: string | null;
+  amount: number;
+  claimToken: string;
 }
 
 export interface SessionEvent {

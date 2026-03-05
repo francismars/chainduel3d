@@ -28,13 +28,16 @@ interface LNBitsWithdrawResponse {
 
 export class LNBitsClient {
   private config: LNBitsConfig;
+  private readonly baseUrl: string;
 
   constructor(config: LNBitsConfig) {
     this.config = config;
+    // Avoid accidental double-slash paths when env URL ends with "/".
+    this.baseUrl = String(config.url || '').replace(/\/+$/, '');
   }
 
   async createInvoice(amount: number, memo: string): Promise<Invoice> {
-    const res = await fetch(`${this.config.url}/api/v1/payments`, {
+    const res = await fetch(`${this.baseUrl}/api/v1/payments`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -60,7 +63,7 @@ export class LNBitsClient {
   }
 
   async checkPayment(paymentHash: string): Promise<boolean> {
-    const res = await fetch(`${this.config.url}/api/v1/payments/${paymentHash}`, {
+    const res = await fetch(`${this.baseUrl}/api/v1/payments/${paymentHash}`, {
       headers: {
         'X-Api-Key': this.config.invoiceKey,
       },
@@ -73,7 +76,7 @@ export class LNBitsClient {
   }
 
   async payInvoice(bolt11: string): Promise<string> {
-    const res = await fetch(`${this.config.url}/api/v1/payments`, {
+    const res = await fetch(`${this.baseUrl}/api/v1/payments`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -94,7 +97,7 @@ export class LNBitsClient {
   }
 
   async createLnurlWithdraw(amount: number, memo: string): Promise<string> {
-    const res = await fetch(`${this.config.url}/withdraw/api/v1/links`, {
+    const res = await fetch(`${this.baseUrl}/withdraw/api/v1/links`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

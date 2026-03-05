@@ -18,6 +18,7 @@ export interface SimInput {
 export interface SimRuntimeState {
   speedBoostMs: number;
   slowMs: number;
+  pickupCooldownMs?: number;
   drifting: boolean;
   driftDirection: -1 | 0 | 1;
   driftCharge: number;
@@ -84,6 +85,9 @@ export function getChainClassTuning(chainClass: ChainClass): ChainClassTuning {
 export function tickRuntimeTimers(runtime: SimRuntimeState, dtMs: number) {
   runtime.speedBoostMs = Math.max(0, runtime.speedBoostMs - dtMs);
   runtime.slowMs = Math.max(0, runtime.slowMs - dtMs);
+  if (typeof runtime.pickupCooldownMs === 'number') {
+    runtime.pickupCooldownMs = Math.max(0, runtime.pickupCooldownMs - dtMs);
+  }
 }
 
 export function stepPlayerKinematics(
@@ -328,7 +332,8 @@ export type SimRaceEventType =
   | 'finish'
   | 'item_used'
   | 'steal_hit'
-  | 'sacrifice_boost';
+  | 'sacrifice_boost'
+  | 'sat_captured';
 
 export interface SimRaceEvent {
   type: SimRaceEventType;
@@ -438,6 +443,7 @@ export function createDefaultRuntimeState(): SimPlayerRuntimeState {
   return {
     speedBoostMs: 0,
     slowMs: 0,
+    pickupCooldownMs: 0,
     drifting: false,
     driftDirection: 0,
     driftCharge: 0,
@@ -920,6 +926,16 @@ export function buildSimItemBoxes(
   }));
 }
 
+export function computeRecommendedItemBoxCount(
+  activePlayerCount: number,
+  layout: SimRouteLayout | null = null,
+): number {
+  const players = Math.max(1, Math.min(12, Math.round(activePlayerCount || 1)));
+  const multiplier = getSimLayoutType(layout) === 'arena' ? 2.2 : 2.5;
+  const count = Math.round(players * multiplier);
+  return Math.max(10, Math.min(28, count));
+}
+
 export function buildSimStartFrame(routePoints: SimRoutePoint[], layout: SimRouteLayout | null = null): SimStartFrame {
   const start = routePoints[0];
   if (!start) {
@@ -1023,7 +1039,7 @@ export function buildSimStartSlotPose(
     const col = safeSlotIndex % ringCols;
     const c = corners[col];
     // Multi-row starts: each additional row moves inward toward center.
-    const ringScale = Math.max(0.42, 0.68 - row * 0.16);
+    const ringScale = Math.max(0.36, 0.68 - row * 0.22);
     const x = centerX + c.sx * safeRadiusX * ringScale;
     const z = centerZ + c.sz * safeRadiusZ * ringScale;
     const toCenterX = centerX - x;
@@ -1041,7 +1057,7 @@ export function buildSimStartSlotPose(
   for (let i = 0; i < sampleCount; i++) widthAcc += Math.max(6, routePoints[i]?.width ?? 10);
   const startWidth = widthAcc / sampleCount;
   const usableHalfWidth = Math.max(2.2, startWidth * 0.5 - 1.15);
-  const minLaneSpacing = 2.45;
+  const minLaneSpacing = 3.0;
   let gridCols = 4;
   while (gridCols > 2) {
     const requiredHalf = ((gridCols - 1) * 0.5) * minLaneSpacing + 0.5;
@@ -1052,7 +1068,7 @@ export function buildSimStartSlotPose(
   const col = safeSlotIndex % gridCols;
   const maxReach = Math.max(0.1, usableHalfWidth - 0.35);
   const defaultSpacing = gridCols <= 1 ? 0 : (maxReach * 2) / Math.max(1, gridCols - 1);
-  const spacing = Math.max(minLaneSpacing, Math.min(3.15, defaultSpacing));
+  const spacing = Math.max(minLaneSpacing, Math.min(3.55, defaultSpacing));
   const centeredCol = col - (gridCols - 1) * 0.5;
   const defaultOffset = centeredCol * spacing;
   const row0LegacyOffset = lateralOffsets[safeSlotIndex];
@@ -1060,7 +1076,7 @@ export function buildSimStartSlotPose(
     ? Math.max(-maxReach, Math.min(maxReach, row0LegacyOffset))
     : Math.max(-maxReach, Math.min(maxReach, defaultOffset));
   // Wider starts can afford more front-to-back spacing; tighter starts keep rows compact.
-  const rowSpacing = Math.max(3.0, Math.min(4.8, startWidth * 0.34));
+  const rowSpacing = Math.max(4.8, Math.min(7.2, startWidth * 0.52));
   const rowBack = row * rowSpacing;
   return {
     x: frame.x + frame.rightX * o - frame.dirX * rowBack,
@@ -1166,6 +1182,20 @@ export function getAdvancedAiInput(
       targetAngle = centerAngle;
     }
   }
+  let nearbyOpponents = 0;
+  let nearestOpponentDist2 = Infinity;
+  if (playerIndex >= 0) {
+    for (let i = 0; i < opponents.length; i++) {
+      if (i === playerIndex) continue;
+      const opp = opponents[i];
+      if (!opp || opp.finished || opp.chainLength <= 0) continue;
+      const dx = opp.x - state.x;
+      const dz = opp.z - state.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= 18 * 18) nearbyOpponents++;
+      if (d2 < nearestOpponentDist2) nearestOpponentDist2 = d2;
+    }
+  }
   if (arenaLayout) {
     const nx = (state.x - arenaCenterX) / Math.max(1, arenaRadiusX);
     const nz = (state.z - arenaCenterZ) / Math.max(1, arenaRadiusZ);
@@ -1190,15 +1220,25 @@ export function getAdvancedAiInput(
   const steerThreshold = 0.05;
   const left = angleDiff > steerThreshold;
   const right = angleDiff < -steerThreshold;
-  const driftThreshold = mode === 'derby'
-    ? (state.chainLength <= 2 ? 0.9 : 0.62)
-    : (state.chainLength <= 2 ? 0.75 : 0.5);
+  let driftThreshold = mode === 'derby'
+    ? (state.chainLength <= 2 ? 0.95 : 0.66)
+    : (state.chainLength <= 2 ? 0.8 : 0.52);
+  if (mode === 'classic' && nearbyOpponents >= 2) {
+    // Keep lines cleaner in traffic and avoid over-drifting into packs.
+    driftThreshold += 0.1;
+  }
+  if (mode === 'derby' && state.chainLength <= 2 && nearestOpponentDist2 < 14 * 14) {
+    // Low-health derby bots should stop over-committing drifts under pressure.
+    driftThreshold += 0.18;
+  }
   const sharpCorner = Math.abs(angleDiff) > driftThreshold && state.speed > 12;
-  const veryWrong = Math.abs(angleDiff) > 1.2 && state.speed > 15;
+  const veryWrong = Math.abs(angleDiff) > 1.15 && state.speed > 15;
+  const underThreat = mode === 'derby' && state.chainLength <= 2 && nearestOpponentDist2 < 15 * 15;
+  const brakeForThreat = underThreat && Math.abs(angleDiff) > 0.55 && state.speed > 11;
 
   return {
-    forward: !veryWrong,
-    backward: veryWrong,
+    forward: !veryWrong && !brakeForThreat,
+    backward: veryWrong || brakeForThreat,
     left,
     right,
     drift: sharpCorner,
@@ -1628,9 +1668,13 @@ export function collectNearbyItem(
   players: SimItemPlayerState[],
   itemBoxes: SimItemBoxState[],
   finalLapIntensity: boolean,
+  runtime?: Array<{ pickupCooldownMs?: number }>,
+  pickupCooldownMs = 900,
 ): boolean {
   const p = players[playerIndex];
   if (!p || p.finished || p.chainLength <= 0 || p.heldItemId) return false;
+  const rt = runtime?.[playerIndex];
+  if ((rt?.pickupCooldownMs ?? 0) > 0) return false;
   for (const box of itemBoxes) {
     if (!box.active) continue;
     const dx = p.x - box.x;
@@ -1642,6 +1686,7 @@ export function collectNearbyItem(
     p.heldItemId = box.previewItem;
     box.active = false;
     box.respawnMs = finalLapIntensity ? 3500 : 5000;
+    if (rt) rt.pickupCooldownMs = Math.max(0, pickupCooldownMs);
     return true;
   }
   return false;
@@ -1841,6 +1886,7 @@ export function computePlacements(
   players: SimPlacementPlayer[],
   checkpointCount: number,
   mode: GameMode = 'classic',
+  capturedSatsByPlayer: number[] = [],
 ): number[] {
   const rows = players.map((p, i) => ({
     i,
@@ -1857,6 +1903,14 @@ export function computePlacements(
       if (a.progress !== b.progress) return b.progress - a.progress;
       return a.i - b.i;
     }
+    if (mode === 'capture_sats') {
+      const aSats = capturedSatsByPlayer[a.i] ?? 0;
+      const bSats = capturedSatsByPlayer[b.i] ?? 0;
+      if (aSats !== bSats) return bSats - aSats;
+      if (a.eliminated !== b.eliminated) return a.eliminated ? 1 : -1;
+      if (a.chainLength !== b.chainLength) return b.chainLength - a.chainLength;
+      return a.i - b.i;
+    }
     if (a.finished !== b.finished) return a.finished ? -1 : 1;
     if (a.finished && b.finished && a.finishTime !== b.finishTime) return a.finishTime - b.finishTime;
     if (a.eliminated !== b.eliminated) return a.eliminated ? 1 : -1;
@@ -1871,12 +1925,19 @@ export function shouldEndRace(
   minFinishers = 3,
   mode: GameMode = 'classic',
   raceTimeMs = 0,
+  captureSatsRemaining?: number,
 ): boolean {
   if (mode === 'derby') {
     const aliveCount = players.filter(p => !p.eliminated).length;
     if (aliveCount <= 1) return true;
     if (aliveCount === 0) return true;
     if (raceTimeMs >= DERBY_MAX_TIME_MS) return true;
+    return false;
+  }
+  if (mode === 'capture_sats') {
+    if ((captureSatsRemaining ?? 1) <= 0) return true;
+    const aliveCount = players.filter(p => !p.eliminated).length;
+    if (aliveCount === 0) return true;
     return false;
   }
   const finishedCount = players.filter(p => p.finished).length;
@@ -1905,6 +1966,7 @@ const sim = {
   buildSimCheckpoints,
   buildItemBoxPositions,
   buildSimItemBoxes,
+  computeRecommendedItemBoxCount,
   buildSimStartFrame,
   buildSimStartSlotPose,
   getBasicAiInput,

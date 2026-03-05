@@ -1,4 +1,5 @@
 import { ChatMessage, GAME_CONFIG, GameMode, RoomState } from 'shared/types';
+import QRCode from 'qrcode';
 
 type RouteOption = { id: string; name: string };
 const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
@@ -11,12 +12,14 @@ type EntryActions = {
 
 type RoomActions = {
   onBack: () => void;
-  onPatchSettings: (settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; routeId: string; mode: GameMode }>) => void | Promise<void>;
+  onPatchSettings: (settings: Partial<{ laps: number; aiCount: number; chainClasses: Array<'balanced' | 'light' | 'heavy'>; routeId: string; mode: GameMode; wager: any }>) => void | Promise<void>;
   onStart: () => void | Promise<void>;
   onSendChat: (text: string) => void;
   onKick: (memberId: string) => void | Promise<void>;
   onSetReady: (ready: boolean) => void | Promise<void>;
   onSetName: (name: string) => void | Promise<void>;
+  onCreateDeposit: () => Promise<{ invoice: { bolt11: string; amountSat: number; paid: boolean } }>;
+  onRefreshDeposits: () => Promise<{ deposits: Array<{ memberId: string; amountSat: number; paid: boolean }> }>;
 };
 
 export class OnlineLobbyUI {
@@ -274,6 +277,84 @@ export class OnlineLobbyUI {
       left.appendChild(this.labelWrap('YOUR NAME', nameRow));
     }
 
+    if (room.settings.wager?.enabled && room.settings.wager.amountSat > 0) {
+      const depositCard = document.createElement('div');
+      depositCard.style.cssText = 'margin-bottom:10px;padding:8px;border:1px solid #2a2a2a;border-radius:6px;background:#0a0a0a;';
+      const depositTitle = document.createElement('div');
+      depositTitle.textContent = `ESCROW DEPOSIT (${room.settings.wager.amountSat.toLocaleString()} sats/player)`;
+      depositTitle.style.cssText = 'color:#fff;font-size:12px;letter-spacing:0.6px;margin-bottom:6px;';
+      depositCard.appendChild(depositTitle);
+      const depositStatus = document.createElement('div');
+      depositStatus.style.cssText = 'font-size:11px;color:#9f9f9f;margin-bottom:6px;';
+      depositStatus.textContent = 'Unknown deposit status.';
+      depositCard.appendChild(depositStatus);
+      const invoiceText = document.createElement('div');
+      invoiceText.style.cssText = `
+        display:none;margin-bottom:6px;padding:6px;border:1px solid #2b2b2b;border-radius:4px;
+        background:#070707;font-size:10px;color:#cfcfcf;word-break:break-all;line-height:1.35;
+      `;
+      depositCard.appendChild(invoiceText);
+      const invoiceQrWrap = document.createElement('div');
+      invoiceQrWrap.style.cssText = 'display:none;margin-bottom:6px;';
+      const invoiceQrLabel = document.createElement('div');
+      invoiceQrLabel.textContent = 'SCAN INVOICE';
+      invoiceQrLabel.style.cssText = 'font-size:10px;color:#9f9f9f;letter-spacing:0.5px;margin-bottom:4px;';
+      const invoiceQrCanvas = document.createElement('canvas');
+      invoiceQrCanvas.style.cssText = 'display:block;border:1px solid #2b2b2b;border-radius:4px;background:#000;';
+      invoiceQrWrap.appendChild(invoiceQrLabel);
+      invoiceQrWrap.appendChild(invoiceQrCanvas);
+      depositCard.appendChild(invoiceQrWrap);
+      const depositRow = document.createElement('div');
+      depositRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;';
+      const invoiceBtn = document.createElement('button');
+      invoiceBtn.textContent = 'GET MY INVOICE';
+      invoiceBtn.style.cssText = this.btnCss(false);
+      invoiceBtn.onclick = async () => {
+        try {
+          const out = await actions.onCreateDeposit();
+          const bolt11 = out.invoice.bolt11;
+          invoiceText.style.display = 'block';
+          invoiceText.textContent = `BOLT11: ${bolt11}`;
+          try {
+            await QRCode.toCanvas(invoiceQrCanvas, bolt11, {
+              width: 180,
+              margin: 1,
+              color: { dark: '#f0f0f0', light: '#0a0a0a' },
+            });
+            invoiceQrWrap.style.display = 'block';
+          } catch {
+            invoiceQrWrap.style.display = 'none';
+          }
+          try {
+            await navigator.clipboard.writeText(bolt11);
+            this.setStatus('Deposit invoice copied to clipboard.');
+          } catch {
+            this.setStatus('Deposit invoice created. Copy it from the box below.');
+          }
+        } catch (err: any) {
+          this.setStatus(err?.message ?? 'Failed to create deposit invoice');
+        }
+      };
+      depositRow.appendChild(invoiceBtn);
+      const refreshBtn = document.createElement('button');
+      refreshBtn.textContent = 'REFRESH STATUS';
+      refreshBtn.style.cssText = this.btnCss(false);
+      refreshBtn.onclick = async () => {
+        try {
+          const out = await actions.onRefreshDeposits();
+          const paid = out.deposits.filter(d => d.paid).length;
+          const total = out.deposits.length;
+          depositStatus.textContent = `Deposits confirmed: ${paid}/${total}`;
+          this.setStatus(`Deposits confirmed: ${paid}/${total}`);
+        } catch (err: any) {
+          this.setStatus(err?.message ?? 'Failed to refresh deposit status');
+        }
+      };
+      depositRow.appendChild(refreshBtn);
+      depositCard.appendChild(depositRow);
+      left.appendChild(depositCard);
+    }
+
     const classes = Array.from(
       { length: GAME_CONFIG.MAX_PLAYERS },
       (_, i) => room.settings.chainClasses?.[i] ?? 'balanced',
@@ -317,8 +398,35 @@ export class OnlineLobbyUI {
       modeSelect.innerHTML = `
         <option value="classic"${(room.settings.mode ?? 'classic') === 'classic' ? ' selected' : ''}>CLASSIC RACE</option>
         <option value="derby"${room.settings.mode === 'derby' ? ' selected' : ''}>DERBY MODE</option>
+        <option value="capture_sats"${room.settings.mode === 'capture_sats' ? ' selected' : ''}>CAPTURE SATS</option>
       `;
       left.appendChild(this.labelWrap('MODE', modeSelect));
+      const wagerAmountInput = document.createElement('input');
+      wagerAmountInput.type = 'number';
+      wagerAmountInput.min = '0';
+      wagerAmountInput.max = '5000000';
+      wagerAmountInput.value = String(room.settings.wager?.amountSat ?? 0);
+      wagerAmountInput.disabled = room.phase !== 'lobby';
+      wagerAmountInput.style.cssText = this.inputCss();
+      left.appendChild(this.labelWrap('WAGER (SATS)', wagerAmountInput));
+      const wagerModeSelect = document.createElement('select');
+      wagerModeSelect.style.cssText = this.inputCss();
+      wagerModeSelect.disabled = room.phase !== 'lobby';
+      wagerModeSelect.innerHTML = `
+        <option value="for_keeps"${(room.settings.wager?.mode ?? 'for_keeps') === 'for_keeps' ? ' selected' : ''}>FOR KEEPS</option>
+        <option value="capture_sats"${room.settings.wager?.mode === 'capture_sats' ? ' selected' : ''}>CAPTURE SATS</option>
+      `;
+      left.appendChild(this.labelWrap('WAGER MODE', wagerModeSelect));
+      const winnerCountSelect = document.createElement('select');
+      winnerCountSelect.style.cssText = this.inputCss();
+      winnerCountSelect.disabled = room.phase !== 'lobby';
+      const winnerCount = room.settings.wager?.winnerCount ?? 1;
+      winnerCountSelect.innerHTML = `
+        <option value="1"${winnerCount === 1 ? ' selected' : ''}>1 WINNER</option>
+        <option value="2"${winnerCount === 2 ? ' selected' : ''}>2 WINNERS</option>
+        <option value="3"${winnerCount === 3 ? ' selected' : ''}>3 WINNERS</option>
+      `;
+      left.appendChild(this.labelWrap('WINNER COUNT', winnerCountSelect));
 
       const classRow = document.createElement('div');
       classRow.style.cssText = 'display:grid;grid-template-columns:repeat(4, minmax(120px, 1fr));gap:8px;margin-top:8px;';
@@ -351,7 +459,19 @@ export class OnlineLobbyUI {
             return v === 'light' || v === 'heavy' ? v : 'balanced';
           }),
           routeId: trackSelect.value || 'default',
-          mode: modeSelect.value === 'derby' ? 'derby' : 'classic',
+          mode: modeSelect.value === 'derby' ? 'derby' : modeSelect.value === 'capture_sats' ? 'capture_sats' : 'classic',
+          wager: {
+            enabled: Math.max(0, parseInt(wagerAmountInput.value || '0', 10)) > 0,
+            practiceOnly: false,
+            amountSat: Math.max(0, Math.min(5_000_000, parseInt(wagerAmountInput.value || '0', 10))),
+            mode: wagerModeSelect.value === 'capture_sats' ? 'capture_sats' : 'for_keeps',
+            winnerCount: winnerCountSelect.value === '3' ? 3 : winnerCountSelect.value === '2' ? 2 : 1,
+            rankWeights: winnerCountSelect.value === '3'
+              ? [0.6, 0.3, 0.1]
+              : winnerCountSelect.value === '2'
+                ? [0.7, 0.3]
+                : [1],
+          },
         });
         left.appendChild(applyBtn);
       }
@@ -396,6 +516,8 @@ export class OnlineLobbyUI {
         <div>AI COUNT: ${room.settings.aiCount}</div>
         <div>ROUTE: ${this.routes.find(r => r.id === (room.settings.routeId || 'default'))?.name ?? room.settings.routeId}</div>
         <div>MODE: ${(room.settings.mode ?? 'classic').toUpperCase()}</div>
+        <div>WAGER: ${(room.settings.wager?.amountSat ?? 0).toLocaleString()} sats (${room.settings.wager?.mode ?? 'for_keeps'})</div>
+        <div>PAYOUT: TOP ${room.settings.wager?.winnerCount ?? 1}</div>
       `;
       left.appendChild(summary);
       if (room.phase === 'lobby' && (me?.slotIndex ?? -1) >= 0) {

@@ -37,68 +37,72 @@ export class ItemSystem {
     this.playerItems = new Array(Math.max(1, playerCount | 0)).fill(null);
 
     for (const pos of positions) {
-      const group = new THREE.Group();
-      group.position.copy(pos);
-
-      const outerGeom = new THREE.BoxGeometry(1.2, 1.2, 1.2);
-      const outerMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0.3,
-        wireframe: true,
-      });
-      group.add(new THREE.Mesh(outerGeom, outerMat));
-
-      const innerMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        emissive: 0x888888,
-        emissiveIntensity: 0.6,
-      });
-      group.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), innerMat));
-
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 64;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 40px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('?', 32, 32);
-      const tex = new THREE.CanvasTexture(canvas);
-      const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
-      const sprite = new THREE.Sprite(spriteMat);
-      sprite.scale.set(0.6, 0.6, 0.6);
-      group.add(sprite);
-
-      const ringGeom = new THREE.RingGeometry(0.8, 0.9, 24);
-      const ringMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0.2,
-        side: THREE.DoubleSide,
-      });
-      const ring = new THREE.Mesh(ringGeom, ringMat);
-      group.add(ring);
-
-      scene.add(group);
-      const previewItem = this.rollPreviewItem();
-      const box: ItemBox = {
-        mesh: group,
-        position: pos.clone(),
-        active: true,
-        respawnTimer: 0,
-        ring,
-        sprite,
-        spriteCtx: ctx,
-        spriteTex: tex,
-        previewItem,
-        previewTimer: 0,
-        previewFlashTimer: 0.35,
-      };
-      this.paintPreviewIcon(box, previewItem);
-      this.itemBoxes.push(box);
+      this.itemBoxes.push(this.createItemBox(pos.clone()));
     }
+  }
+
+  private createItemBox(position: THREE.Vector3): ItemBox {
+    const group = new THREE.Group();
+    group.position.copy(position);
+
+    const outerGeom = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+    const outerMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.3,
+      wireframe: true,
+    });
+    group.add(new THREE.Mesh(outerGeom, outerMat));
+
+    const innerMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0x888888,
+      emissiveIntensity: 0.6,
+    });
+    group.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), innerMat));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 40px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', 32, 32);
+    const tex = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(0.6, 0.6, 0.6);
+    group.add(sprite);
+
+    const ringGeom = new THREE.RingGeometry(0.8, 0.9, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.2,
+      side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(ringGeom, ringMat);
+    group.add(ring);
+
+    this.scene.add(group);
+    const previewItem = this.rollPreviewItem();
+    const box: ItemBox = {
+      mesh: group,
+      position: position.clone(),
+      active: true,
+      respawnTimer: 0,
+      ring,
+      sprite,
+      spriteCtx: ctx,
+      spriteTex: tex,
+      previewItem,
+      previewTimer: 0,
+      previewFlashTimer: 0.35,
+    };
+    this.paintPreviewIcon(box, previewItem);
+    return box;
   }
 
   update(dt: number, karts: ChainRider[], positions: number[]) {
@@ -456,6 +460,16 @@ export class ItemSystem {
 
   applyOnlineItemBoxes(serverBoxes: OnlineItemBoxState[] | undefined) {
     if (!serverBoxes) return;
+    while (this.itemBoxes.length < serverBoxes.length) {
+      const remote = serverBoxes[this.itemBoxes.length];
+      const pos = new THREE.Vector3(remote.x, remote.y, remote.z);
+      this.itemBoxes.push(this.createItemBox(pos));
+    }
+    while (this.itemBoxes.length > serverBoxes.length) {
+      const removed = this.itemBoxes.pop();
+      if (!removed) break;
+      this.scene.remove(removed.mesh);
+    }
     for (let i = 0; i < this.itemBoxes.length; i++) {
       const local = this.itemBoxes[i];
       const remote = serverBoxes[i];
