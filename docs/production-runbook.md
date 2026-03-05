@@ -18,6 +18,12 @@ Set these repository or environment secrets:
 
 Create protected GitHub Environment `production` with required reviewers for the manual promotion gate.
 
+## 2.1) Compatibility and Rollout Notes
+
+- Admin route API now requires bearer tokens from `POST /api/admin/auth/login`.
+- Session endpoints support optional `x-idempotency-key`. Existing clients that do not send idempotency keys are still accepted.
+- Room/session runtime persistence is enabled by default at `server/data/runtime/state.json`. Ensure this path is on persistent storage in staging and production.
+
 ## 3) VM Directory Layout
 
 On each VM:
@@ -40,6 +46,12 @@ Then:
 cp server/.env.production.example server/.env
 # edit server/.env with real values
 ```
+
+Recommended additional environment variables for hardened builds:
+
+- `RUNTIME_STATE_FILE=server/data/runtime/state.json`
+- `ADMIN_TOKEN_TTL_MS=900000`
+- `ROOM_MEMBER_TOKEN_TTL_MS=86400000`
 
 ## 4) First-Time TLS Bootstrap (Let's Encrypt)
 
@@ -98,6 +110,18 @@ SMOKE_BASE_URL=https://3d.chainduel.net SMOKE_ADMIN_SECRET=<admin_secret> npm ru
 7. Validate LNBits flow on staging wallet:
    - session creates invoices
    - result endpoint returns payout (or safe fallback if LNBits unavailable)
+8. Run hardening checks:
+
+```bash
+npm run test:payments --workspace=server
+npm run test:ws --workspace=server
+```
+
+9. Verify compatibility behavior:
+   - admin CRUD works with bearer token auth flow from `POST /api/admin/auth/login`
+   - session create/result still work without `x-idempotency-key` header
+10. Complete [staging release checklist](./staging-release-checklist.md).
+11. Record promotion decision using [go/no-go template](./go-no-go-template.md).
 
 ## 7) Updating an Existing Deployment
 

@@ -27,3 +27,9 @@ jobs:
 
       - name: Run parity test
         run: npm run test:parity --workspace=server
+
+      - name: Run payment contract test
+        run: npm run test:payments --workspace=server
+
+      - name: Run websocket lifecycle test
+        run: npm run test:ws --workspace=server

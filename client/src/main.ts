@@ -13,6 +13,7 @@ import { ResultUI } from './lobby/ResultUI';
 import { ChatMessage, GAME_CONFIG, GameMode, OnlineRaceSnapshot, RaceItemStats, RoomState, RouteCustomLayout, RouteDefinition } from 'shared/types';
 import { RoomClient } from './online/RoomClient';
 import { setupPWA } from './pwa';
+import { SessionApi } from './services/SessionApi';
 
 setupPWA();
 
@@ -99,13 +100,15 @@ class ChainDuel3DApp {
   private paymentUI: PaymentUI;
   private resultUI: ResultUI;
   private roomClient: RoomClient;
+  private sessionApi: SessionApi;
   private game: Game | null = null;
   private sessionId: string | null = null;
   private wagerAmount: number = GAME_CONFIG.MIN_WAGER;
   private totalLaps: number = GAME_CONFIG.TOTAL_LAPS;
-  private playerNames: string[] = ['Player 1', 'Player 2', 'Player 3', 'Player 4'];
-  private isAI: boolean[] = [false, true, true, true];
-  private chainClasses: ChainClass[] = ['balanced', 'balanced', 'balanced', 'balanced'];
+  private playerNames: string[] = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, (_, i) => `Player ${i + 1}`);
+  private isAI: boolean[] = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, (_, i) => i !== 0);
+  private chainClasses: ChainClass[] = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, () => 'balanced');
+  private localActiveSlots: boolean[] = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, (_, i) => i < 4);
   private onlineRoom: RoomState | null = null;
   private onlineMemberId: string | null = null;
   private onlineInviteCodeFromUrl: string | null = null;
@@ -126,6 +129,7 @@ class ChainDuel3DApp {
     this.paymentUI = new PaymentUI(this.container);
     this.resultUI = new ResultUI(this.container);
     this.roomClient = new RoomClient();
+    this.sessionApi = new SessionApi();
     this.lobbyUI.setRoutes(this.routes);
     this.onlineLobbyUI.setRoutes(this.routes);
     this.roomClient.setHandlers({
@@ -378,6 +382,7 @@ class ChainDuel3DApp {
     playerNames: string[],
     isAI: boolean[],
     chainClasses: ChainClass[],
+    activeSlots: boolean[],
     wager: number,
     laps: number,
     skipPayment: boolean,
@@ -387,6 +392,7 @@ class ChainDuel3DApp {
     this.playerNames = playerNames;
     this.isAI = isAI;
     this.chainClasses = chainClasses;
+    this.localActiveSlots = activeSlots;
     this.wagerAmount = wager;
     this.totalLaps = laps;
     this.selectedRouteId = routeId || 'default';
@@ -396,13 +402,7 @@ class ChainDuel3DApp {
       this.state = 'payment';
       this.container.innerHTML = '';
       try {
-        const res = await fetch('/api/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wagerAmount: wager, playerNames }),
-        });
-        if (!res.ok) throw new Error('Failed to create session');
-        const data = await res.json();
+        const data = await this.sessionApi.createSession(wager, playerNames);
         this.sessionId = data.sessionId;
         const paid = await this.paymentUI.show(data);
         if (!paid) {
@@ -432,6 +432,7 @@ class ChainDuel3DApp {
       routeLayout,
       SPONSOR_LOGO_URLS,
       this.gameMode,
+      this.localActiveSlots,
       this.onRaceFinished.bind(this),
     );
     this.game.start();
@@ -440,25 +441,32 @@ class ChainDuel3DApp {
   private startOnlineRace(room: RoomState) {
     if (!this.onlineMemberId) return;
     const membersBySlot = [...room.members].sort((a, b) => a.slotIndex - b.slotIndex);
-    const names = ['Player 1', 'Player 2', 'Player 3', 'Player 4'];
-    const isAI = [true, true, true, true];
+    const names = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, (_, i) => `Player ${i + 1}`);
+    const isAI = new Array(GAME_CONFIG.MAX_PLAYERS).fill(true);
+    const activeSlots = new Array(GAME_CONFIG.MAX_PLAYERS).fill(false);
     for (const m of membersBySlot) {
-      if (m.slotIndex < 0 || m.slotIndex >= 4) continue;
+      if (m.slotIndex < 0 || m.slotIndex >= GAME_CONFIG.MAX_PLAYERS) continue;
       names[m.slotIndex] = m.name;
       isAI[m.slotIndex] = false;
+      activeSlots[m.slotIndex] = true;
     }
     let aiToFill = room.settings.aiCount;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < GAME_CONFIG.MAX_PLAYERS; i++) {
       if (!isAI[i]) continue;
       if (aiToFill > 0) {
         names[i] = `AI ${i + 1}`;
         isAI[i] = true;
+        activeSlots[i] = true;
         aiToFill--;
       }
     }
     this.playerNames = [...names];
     this.isAI = [...isAI];
-    this.chainClasses = [...(room.settings.chainClasses ?? ['balanced', 'balanced', 'balanced', 'balanced'])];
+    this.chainClasses = Array.from(
+      { length: GAME_CONFIG.MAX_PLAYERS },
+      (_, i) => room.settings.chainClasses?.[i] ?? 'balanced',
+    );
+    this.localActiveSlots = activeSlots;
     this.totalLaps = room.settings.laps;
     this.selectedRouteId = room.settings.routeId || 'default';
     const localSlot = room.members.find(m => m.memberId === this.onlineMemberId)?.slotIndex ?? -1;
@@ -484,6 +492,7 @@ class ChainDuel3DApp {
       null,
       SPONSOR_LOGO_URLS,
       this.gameMode,
+      activeSlots,
       this.onRaceFinished.bind(this),
     );
     if (this.latestRoomSnapshot) {
@@ -518,25 +527,18 @@ class ChainDuel3DApp {
 
     if (this.sessionId) {
       try {
-        const res = await fetch(`/api/sessions/${this.sessionId}/result`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ winnerId: `player${winnerId + 1}` }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          this.resultUI.show(
-            winnerName,
-            top3Names,
-            data.amount,
-            data.lnurl,
-            () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
-            this.gameMode,
-            this.lastRaceItemStats,
-            this.playerNames,
-          );
-          return;
-        }
+        const data = await this.sessionApi.submitResult(this.sessionId, `player${winnerId + 1}`);
+        this.resultUI.show(
+          winnerName,
+          top3Names,
+          data.amount,
+          data.lnurl,
+          () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
+          this.gameMode,
+          this.lastRaceItemStats,
+          this.playerNames,
+        );
+        return;
       } catch { /* fall through to simple result */ }
     }
 
@@ -654,6 +656,36 @@ class ChainDuel3DApp {
     card.appendChild(sponsorDetails);
     this.renderSponsorPreviewPanel(sponsorPanel);
     const getAdminSecret = () => secretInput.value.trim();
+    let adminBearerToken: string | null = null;
+    let adminBearerTokenExpiresAt = 0;
+
+    const getAdminAuthHeaders = async (includeJsonContentType = true): Promise<Record<string, string>> => {
+      const secret = getAdminSecret();
+      if (!secret) throw new Error('Enter admin secret first.');
+      if (!adminBearerToken || Date.now() + 5_000 >= adminBearerTokenExpiresAt) {
+        const loginRes = await fetch('/api/admin/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ secret }),
+        });
+        if (!loginRes.ok) {
+          throw new Error('Admin login failed');
+        }
+        const loginData = await loginRes.json() as { token?: string; expiresAt?: number };
+        if (!loginData.token || !loginData.expiresAt) {
+          throw new Error('Admin login returned invalid token payload');
+        }
+        adminBearerToken = loginData.token;
+        adminBearerTokenExpiresAt = loginData.expiresAt;
+      }
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${adminBearerToken}`,
+      };
+      if (includeJsonContentType) {
+        headers['Content-Type'] = 'application/json';
+      }
+      return headers;
+    };
 
     const routeSelect = document.createElement('select');
     routeSelect.style.cssText = 'width:100%;padding:10px;border-radius:6px;border:1px solid #333;background:#101010;color:#e8e8e8;';
@@ -728,12 +760,16 @@ class ChainDuel3DApp {
       }
       const method = 'PUT';
       const url = `/api/admin/routes/${encodeURIComponent(selectedId)}`;
+      let headers: Record<string, string>;
+      try {
+        headers = await getAdminAuthHeaders(true);
+      } catch (err: any) {
+        status.textContent = err?.message ?? 'Admin login failed.';
+        return;
+      }
       const res = await fetch(url, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-secret': getAdminSecret(),
-        },
+        headers,
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -766,12 +802,16 @@ class ChainDuel3DApp {
         status.textContent = 'Enter admin secret first.';
         return;
       }
+      let headers: Record<string, string>;
+      try {
+        headers = await getAdminAuthHeaders(true);
+      } catch (err: any) {
+        status.textContent = err?.message ?? 'Admin login failed.';
+        return;
+      }
       const res = await fetch('/api/admin/routes', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-secret': getAdminSecret(),
-        },
+        headers,
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -798,9 +838,16 @@ class ChainDuel3DApp {
         status.textContent = 'Enter admin secret first.';
         return;
       }
+      let headers: Record<string, string>;
+      try {
+        headers = await getAdminAuthHeaders(false);
+      } catch (err: any) {
+        status.textContent = err?.message ?? 'Admin login failed.';
+        return;
+      }
       const res = await fetch(`/api/admin/routes/${encodeURIComponent(selectedId)}`, {
         method: 'DELETE',
-        headers: { 'x-admin-secret': getAdminSecret() },
+        headers,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));

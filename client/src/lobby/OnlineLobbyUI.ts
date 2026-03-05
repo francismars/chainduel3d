@@ -1,4 +1,4 @@
-import { ChatMessage, GameMode, RoomState } from 'shared/types';
+import { ChatMessage, GAME_CONFIG, GameMode, RoomState } from 'shared/types';
 
 type RouteOption = { id: string; name: string };
 const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
@@ -274,7 +274,10 @@ export class OnlineLobbyUI {
       left.appendChild(this.labelWrap('YOUR NAME', nameRow));
     }
 
-    const classes = room.settings.chainClasses ?? ['balanced', 'balanced', 'balanced', 'balanced'];
+    const classes = Array.from(
+      { length: GAME_CONFIG.MAX_PLAYERS },
+      (_, i) => room.settings.chainClasses?.[i] ?? 'balanced',
+    );
     if (isHost) {
       const settingsRow = document.createElement('div');
       settingsRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;';
@@ -289,7 +292,7 @@ export class OnlineLobbyUI {
       const aiInput = document.createElement('input');
       aiInput.type = 'number';
       aiInput.min = '0';
-      aiInput.max = '4';
+      aiInput.max = String(GAME_CONFIG.MAX_PLAYERS);
       aiInput.value = String(room.settings.aiCount);
       aiInput.disabled = room.phase !== 'lobby';
       aiInput.style.cssText = this.inputCss();
@@ -318,9 +321,9 @@ export class OnlineLobbyUI {
       left.appendChild(this.labelWrap('MODE', modeSelect));
 
       const classRow = document.createElement('div');
-      classRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;';
+      classRow.style.cssText = 'display:grid;grid-template-columns:repeat(4, minmax(120px, 1fr));gap:8px;margin-top:8px;';
       const classSelects: HTMLSelectElement[] = [];
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < GAME_CONFIG.MAX_PLAYERS; i++) {
         const sel = document.createElement('select');
         sel.style.cssText = this.inputCss();
         sel.disabled = room.phase !== 'lobby';
@@ -342,7 +345,7 @@ export class OnlineLobbyUI {
         applyBtn.style.cssText = this.secondaryBtnCss();
         applyBtn.onclick = () => void actions.onPatchSettings({
           laps: Math.max(1, Math.min(9, parseInt(lapsInput.value || String(room.settings.laps), 10))),
-          aiCount: Math.max(0, Math.min(3, parseInt(aiInput.value || String(room.settings.aiCount), 10))),
+          aiCount: Math.max(0, Math.min(GAME_CONFIG.MAX_PLAYERS, parseInt(aiInput.value || String(room.settings.aiCount), 10))),
           chainClasses: classSelects.map(s => {
             const v = s.value;
             return v === 'light' || v === 'heavy' ? v : 'balanced';

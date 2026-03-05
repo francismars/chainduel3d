@@ -226,7 +226,7 @@ export class Route {
     this.sponsorDecorGroup = new THREE.Group();
     this.sponsorDecorGroup.name = 'SponsorDecor';
     this.mesh.add(this.sponsorDecorGroup);
-    this.startPositions = [new CANNON.Vec3(), new CANNON.Vec3(), new CANNON.Vec3(), new CANNON.Vec3()];
+    this.startPositions = Array.from({ length: 8 }, () => new CANNON.Vec3());
     this.startRotation = 0;
 
     this.generateTrackPoints();

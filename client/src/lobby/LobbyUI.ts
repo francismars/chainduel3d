@@ -21,6 +21,7 @@ export class LobbyUI {
     playerNames: string[],
     isAI: boolean[],
     chainClasses: ChainClass[],
+    activeSlots: boolean[],
     wager: number,
     laps: number,
     skipPayment: boolean,
@@ -36,6 +37,7 @@ export class LobbyUI {
       playerNames: string[],
       isAI: boolean[],
       chainClasses: ChainClass[],
+      activeSlots: boolean[],
       wager: number,
       laps: number,
       skipPayment: boolean,
@@ -153,6 +155,7 @@ export class LobbyUI {
     raceSettingsRow.style.cssText = `display:grid;grid-template-columns:repeat(auto-fit,minmax(${compactLayout ? '150px' : '180px'},1fr));gap:${compactLayout ? '8px' : '10px'};`;
     raceSettingsRow.appendChild(makeField('LAPS [1-9]', 'laps', String(GAME_CONFIG.TOTAL_LAPS), 'number'));
     raceSettingsRow.appendChild(makeField(`WAGER (sats) [${GAME_CONFIG.MIN_WAGER}-${GAME_CONFIG.MAX_WAGER}]`, 'wager', '1000', 'number'));
+    raceSettingsRow.appendChild(makeField('EXTRA AI [0-4]', 'extra_ai', '2', 'number'));
     form.appendChild(raceSettingsRow);
     const trackSelect = document.createElement('select');
     trackSelect.id = 'route_id';
@@ -302,9 +305,9 @@ export class LobbyUI {
   private handleStart(skipPayment: boolean) {
     const ids = ['p1name', 'p2name', 'p3name', 'p4name'];
     const defaults = ['Player 1', 'Player 2', 'Player 3', 'Player 4'];
-    const names = ids.map((id, i) => (document.getElementById(id) as HTMLInputElement)?.value || defaults[i]);
-    const isAI = ids.map(id => (document.getElementById(`${id}_ai`) as HTMLInputElement)?.checked ?? false);
-    const chainClasses = ids.map(id => {
+    const localNames = ids.map((id, i) => (document.getElementById(id) as HTMLInputElement)?.value || defaults[i]);
+    const localIsAI = ids.map(id => (document.getElementById(`${id}_ai`) as HTMLInputElement)?.checked ?? false);
+    const localClasses = ids.map(id => {
       const v = (document.getElementById(`${id}_class`) as HTMLSelectElement)?.value;
       if (v === 'light' || v === 'heavy') return v;
       return 'balanced';
@@ -313,23 +316,43 @@ export class LobbyUI {
     const clampedLaps = Math.max(1, Math.min(9, Number.isFinite(lapsRaw) ? lapsRaw : GAME_CONFIG.TOTAL_LAPS));
     const wager = parseInt((document.getElementById('wager') as HTMLInputElement)?.value || '1000');
     const clampedWager = Math.max(GAME_CONFIG.MIN_WAGER, Math.min(GAME_CONFIG.MAX_WAGER, wager));
+    const extraAiRaw = parseInt((document.getElementById('extra_ai') as HTMLInputElement)?.value || '0', 10);
+    const extraAi = Math.max(0, Math.min(4, Number.isFinite(extraAiRaw) ? extraAiRaw : 0));
     const routeId = (document.getElementById('route_id') as HTMLSelectElement)?.value || 'default';
     const modeRaw = (document.getElementById('game_mode') as HTMLSelectElement)?.value;
     const mode: GameMode = modeRaw === 'derby' ? 'derby' : 'classic';
+    const names: string[] = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, (_, i) => `Player ${i + 1}`);
+    const isAI: boolean[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill(true);
+    const chainClasses: ChainClass[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill('balanced');
+    const activeSlots: boolean[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill(false);
+    for (let i = 0; i < 4; i++) {
+      names[i] = localNames[i];
+      isAI[i] = localIsAI[i];
+      chainClasses[i] = localClasses[i];
+      activeSlots[i] = true;
+    }
+    for (let i = 0; i < extraAi; i++) {
+      const slot = 4 + i;
+      names[slot] = `AI ${slot + 1}`;
+      isAI[slot] = true;
+      chainClasses[slot] = 'balanced';
+      activeSlots[slot] = true;
+    }
 
-    this.onStart(names, isAI, chainClasses, clampedWager, clampedLaps, skipPayment, routeId, mode);
+    this.onStart(names, isAI, chainClasses, activeSlots, clampedWager, clampedLaps, skipPayment, routeId, mode);
   }
 
   private startAiOnlyLocalWatch() {
     const lapsRaw = parseInt((document.getElementById('laps') as HTMLInputElement)?.value || String(GAME_CONFIG.TOTAL_LAPS), 10);
     const clampedLaps = Math.max(1, Math.min(9, Number.isFinite(lapsRaw) ? lapsRaw : GAME_CONFIG.TOTAL_LAPS));
-    const names = ['AI 1', 'AI 2', 'AI 3', 'AI 4'];
-    const isAI = [true, true, true, true];
-    const chainClasses: ChainClass[] = ['balanced', 'balanced', 'balanced', 'balanced'];
+    const names = Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, (_, i) => `AI ${i + 1}`);
+    const isAI = new Array(GAME_CONFIG.MAX_PLAYERS).fill(true);
+    const chainClasses: ChainClass[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill('balanced');
+    const activeSlots: boolean[] = new Array(GAME_CONFIG.MAX_PLAYERS).fill(true);
     const routeId = (document.getElementById('route_id') as HTMLSelectElement)?.value || 'default';
     const modeRaw = (document.getElementById('game_mode') as HTMLSelectElement)?.value;
     const mode: GameMode = modeRaw === 'derby' ? 'derby' : 'classic';
-    this.onStart(names, isAI, chainClasses, GAME_CONFIG.MIN_WAGER, clampedLaps, true, routeId, mode);
+    this.onStart(names, isAI, chainClasses, activeSlots, GAME_CONFIG.MIN_WAGER, clampedLaps, true, routeId, mode);
   }
 
   private backBtnCss() {

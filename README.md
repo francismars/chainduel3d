@@ -68,6 +68,9 @@ Variables:
 - `NODE_ENV` (`development` or `production`)
 - `PORT` (server port, default `3000`)
 - `ROUTE_ADMIN_SECRET` (required for `/api/admin/routes/*`)
+- `RUNTIME_STATE_FILE` (optional path for persisted room/session runtime snapshot)
+- `ADMIN_TOKEN_TTL_MS` (optional TTL for admin bearer tokens, default 15m)
+- `ROOM_MEMBER_TOKEN_TTL_MS` (optional TTL for room member tokens, default 24h)
 - `LNBITS_URL`
 - `LNBITS_ADMIN_KEY`
 - `LNBITS_INVOICE_KEY`
@@ -94,6 +97,7 @@ Production startup enforces required env vars and exits if missing.
   - `POST /api/sessions`
   - `GET /api/sessions/:id`
   - `POST /api/sessions/:id/result`
+  - Both session create/result endpoints accept `x-idempotency-key` for retry-safe clients.
 - Rooms:
   - `POST /api/rooms`
   - `POST /api/rooms/join`
@@ -106,10 +110,18 @@ Production startup enforces required env vars and exits if missing.
 - Routes:
   - `GET /api/routes`
   - `GET /api/routes/:routeId`
-- Admin routes (requires `ROUTE_ADMIN_SECRET` via `x-admin-secret` or bearer token):
+- Admin routes (requires bearer token from `POST /api/admin/auth/login`):
+  - `POST /api/admin/auth/login`
   - `POST /api/admin/routes`
   - `PUT /api/admin/routes/:routeId`
   - `DELETE /api/admin/routes/:routeId`
+
+### Backward Compatibility Notes
+
+- **Admin auth migration complete:** admin route APIs now accept bearer tokens only. Legacy `x-admin-secret` header auth has been removed.
+- **Session idempotency compatibility:** `x-idempotency-key` is optional on `POST /api/sessions` and `POST /api/sessions/:id/result`; old clients without this header remain supported.
+- **Runtime persistence compatibility:** server now persists room/session runtime data to `server/data/runtime/state.json` by default. If the path is unwritable or missing, behavior falls back to in-process runtime state for that process lifetime.
+- **Room token TTL:** room member tokens now expire (configurable). Long-running clients should reconnect or refresh credentials on unauthorized responses.
 
 ### WebSocket (`/ws`)
 
@@ -150,6 +162,13 @@ Server messages include:
 # game/physics and integration parity checks
 npm run test:parity --workspace=server
 
+# payment + websocket contract checks
+npm run test:payments --workspace=server
+npm run test:ws --workspace=server
+
+# authority loop load benchmark
+npm run test:load --workspace=server
+
 # API smoke checks against a running deployment
 SMOKE_BASE_URL=https://your-host SMOKE_ADMIN_SECRET=your_secret npm run test:smoke --workspace=server
 ```
@@ -168,7 +187,7 @@ Use the full runbook for setup, TLS bootstrap, staging verification, monitoring,
 
 ## Operational Notes
 
-- Room/session runtime state is in-memory and is lost on server restart.
+- Runtime room/session snapshots are persisted at `server/data/runtime/state.json` by default.
 - Route catalog is file-backed under `server/data/routes.json`; ensure persistent volume/backup strategy in production.
 - If `ROUTE_ADMIN_SECRET` is unset, admin route APIs are effectively disabled.
 

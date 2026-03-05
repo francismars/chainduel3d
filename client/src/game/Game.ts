@@ -8,7 +8,7 @@ import { InputManager } from './InputManager';
 import { ItemSystem } from './ItemSystem';
 import { HUD } from './HUD';
 import { Countdown } from './Countdown';
-import { GameMode, ItemId, OnlineRaceEvent, OnlineRaceInput, OnlineRaceSnapshot, RaceItemStats, RoomMember, RouteCustomLayout } from 'shared/types';
+import { GAME_CONFIG, GameMode, ItemId, OnlineRaceEvent, OnlineRaceInput, OnlineRaceSnapshot, RaceItemStats, RoomMember, RouteCustomLayout } from 'shared/types';
 import {
   createDefaultRuntimeState,
   createSimRandomState,
@@ -46,8 +46,8 @@ import {
   type SimRoutePoint,
 } from 'shared/sim';
 
-const NUM_PLAYERS = 4;
-const CHAIN_COLORS = [0xffffff, 0x888888, 0x44aaff, 0xff4444];
+const NUM_PLAYERS = GAME_CONFIG.MAX_PLAYERS;
+const CHAIN_COLORS = [0xffffff, 0x888888, 0x44aaff, 0xff4444, 0x8aff44, 0xffaa44, 0xaa66ff, 0x44ffee];
 const START_CHAIN_BLOCKS = 5;
 const STEAL_COOLDOWN_MS = 1100;
 const MEMPOOL_API_BASE = 'https://mempool.space/api';
@@ -118,6 +118,7 @@ export class Game {
   private localAuthoritySnapshot: OnlineRaceSnapshot | null = null;
   private onlinePoseInitialized = false;
   private onlineStartAtMs: number | null = null;
+  private onlineServerClockOffsetMs: number | null = null;
   private raceAnnouncementEl: HTMLDivElement | null = null;
   private disposed = false;
   private localSimRouteMain: SimRoutePoint[] = [];
@@ -132,6 +133,7 @@ export class Game {
   private raceRouteLayout: RouteCustomLayout | null = null;
   private sponsorLogoUrls: string[];
   private gameMode: GameMode;
+  private activeSlots: boolean[];
   private isArenaLayout = false;
   private itemStats: RaceItemStats[] = Array.from({ length: NUM_PLAYERS }, (_, playerIndex) => ({
     playerIndex,
@@ -153,20 +155,23 @@ export class Game {
     localRouteLayout: RouteCustomLayout | null | undefined,
     sponsorLogoUrls: string[] | undefined,
     gameMode: GameMode,
+    activeSlots: boolean[] | undefined,
     onFinished: (top3Ids: number[]) => void,
   ) {
     this.container = container;
-    this.playerNames = playerNames;
-    this.isAI = isAI;
+    this.activeSlots = Array.from({ length: NUM_PLAYERS }, (_, i) => activeSlots?.[i] ?? true);
+    this.playerNames = Array.from({ length: NUM_PLAYERS }, (_, i) => playerNames[i] ?? `Player ${i + 1}`);
+    this.isAI = Array.from({ length: NUM_PLAYERS }, (_, i) => (this.activeSlots[i] ? (isAI[i] ?? true) : true));
     this.online = online ?? null;
     this.onlineStartAtMs = this.online?.getOnlineStartAt() ?? null;
     this.humanPlayerIndices = this.online?.enabled
       ? [this.online.localSlot >= 0 ? Math.max(0, Math.min(NUM_PLAYERS - 1, this.online.localSlot)) : 0]
-      : this.getHumanPlayerIndices(isAI);
-    this.chainClasses = chainClasses;
+      : this.getHumanPlayerIndices(this.isAI);
+    this.humanPlayerIndices = this.humanPlayerIndices.slice(0, 4);
+    this.chainClasses = Array.from({ length: NUM_PLAYERS }, (_, i) => chainClasses[i] ?? 'balanced');
     this.totalLaps = Math.max(1, Math.min(9, Math.round(totalLaps || 3)));
-    this.chainLengths = new Array(NUM_PLAYERS).fill(START_CHAIN_BLOCKS);
-    this.eliminated = new Array(NUM_PLAYERS).fill(false);
+    this.chainLengths = Array.from({ length: NUM_PLAYERS }, (_, i) => (this.activeSlots[i] ? START_CHAIN_BLOCKS : 0));
+    this.eliminated = Array.from({ length: NUM_PLAYERS }, (_, i) => !this.activeSlots[i]);
     this.stealCooldownMs = Array.from({ length: NUM_PLAYERS }, () => new Array(NUM_PLAYERS).fill(0));
     this.sacrificeCooldownMs = new Array(NUM_PLAYERS).fill(0);
     this.lapStartTimes = new Array(NUM_PLAYERS).fill(0);
@@ -203,7 +208,7 @@ export class Game {
     this.setupLighting();
     this.setupSkybox();
 
-    this.splitScreen = new SplitScreen(container);
+    this.splitScreen = new SplitScreen(container, NUM_PLAYERS);
     this.splitScreen.setActivePlayers(this.humanPlayerIndices);
 
     const resolvedRouteLayout = this.online?.enabled ? (this.online.routeLayout ?? null) : (localRouteLayout ?? null);
@@ -235,6 +240,15 @@ export class Game {
 
     const localAuthorityEnabled = !this.online?.enabled;
     for (const kart of this.karts) kart.setAuthoritativeControlEnabled(localAuthorityEnabled);
+    if (!this.online?.enabled) {
+      for (let i = 0; i < NUM_PLAYERS; i++) {
+        if (this.activeSlots[i]) continue;
+        const kart = this.karts[i];
+        while (kart.getChainLength() > 0) kart.loseBlock();
+        kart.finished = true;
+        kart.finishTime = Number.POSITIVE_INFINITY;
+      }
+    }
 
     this.cameras = [];
     for (let i = 0; i < NUM_PLAYERS; i++) {
@@ -245,7 +259,7 @@ export class Game {
     }
 
     this.inputManager = new InputManager(this.container);
-    this.itemSystem = new ItemSystem(this.scene, this.route.itemBoxPositions);
+    this.itemSystem = new ItemSystem(this.scene, this.route.itemBoxPositions, NUM_PLAYERS);
     this.itemSystem.setLocalAuthorityEnabled(!this.online?.enabled);
     this.lastHeldItems = this.itemSystem.playerItems.map(item => this.normalizeItemId(item));
     const minimapPath = this.route.routePoints
@@ -270,6 +284,7 @@ export class Game {
     if (this.latestOnlineSnapshot && snapshot.tick < this.latestOnlineSnapshot.tick) return;
     this.prevOnlineSnapshot = this.latestOnlineSnapshot;
     this.latestOnlineSnapshot = snapshot;
+    this.sampleOnlineServerClockOffset(snapshot.at);
     if (snapshot.standings?.placementOrder) {
       this.setOnlineStandings(snapshot.standings.placementOrder);
     }
@@ -353,9 +368,10 @@ export class Game {
   private getHumanPlayerIndices(isAI: boolean[]): number[] {
     const humans: number[] = [];
     for (let i = 0; i < NUM_PLAYERS; i++) {
+      if (!this.activeSlots[i]) continue;
       if (!isAI[i]) humans.push(i);
     }
-    return humans.length > 0 ? humans : [0];
+    return humans.length > 0 ? humans.slice(0, 4) : [0];
   }
 
   private initLocalSimRouteData() {
@@ -507,7 +523,7 @@ export class Game {
 
       if (!k.isEliminated() && k.finished) {
         const cameraEdges = consumeRaceActionEdges(
-          { useItem: this.inputManager.getInput(i).useItem, sacrificeBoost: false },
+          { useItem: this.inputManager.getInput(this.online?.enabled ? 0 : i).useItem, sacrificeBoost: false },
           this.cameraActionPressState[i],
         );
         if (cameraEdges.useItemJustPressed) {
@@ -860,6 +876,12 @@ export class Game {
     this.localSimTimeMs = step.state.timeMs;
 
     for (let i = 0; i < NUM_PLAYERS; i++) {
+      if (!this.activeSlots[i]) {
+        this.chainLengths[i] = 0;
+        this.eliminated[i] = true;
+        this.karts[i].finished = true;
+        continue;
+      }
       const p = step.state.players[i];
       const kart = this.karts[i];
       kart.applyNetworkState(
@@ -952,7 +974,7 @@ export class Game {
       this.localSimCheckpoints.length,
       this.gameMode,
     );
-    const rankByPlayer = new Array(NUM_PLAYERS).fill(3);
+    const rankByPlayer = new Array(NUM_PLAYERS).fill(NUM_PLAYERS - 1);
     for (let place = 0; place < placementOrder.length && place < NUM_PLAYERS; place++) {
       const idx = placementOrder[place] | 0;
       if (idx >= 0 && idx < NUM_PLAYERS) rankByPlayer[idx] = place;
@@ -1013,7 +1035,7 @@ export class Game {
     const renderDelayMs = options.renderDelayMs;
     const to = this.latestOnlineSnapshot;
     const from = this.prevOnlineSnapshot ?? to;
-    const targetTime = Date.now() - renderDelayMs;
+    const targetTime = this.getEstimatedOnlineServerNowMs() - renderDelayMs;
     const range = Math.max(1, to.at - from.at);
     const t = Math.max(0, Math.min(1, (targetTime - from.at) / range));
     const n = Math.min(NUM_PLAYERS, to.players.length);
@@ -1060,6 +1082,25 @@ export class Game {
     this.itemSystem.applyOnlineItemBoxes(to.itemBoxes);
     this.itemSystem.applyOnlineObstacles(to.obstacles);
     this.consumeOnlineEvents(to, options.eventSource);
+  }
+
+  private sampleOnlineServerClockOffset(serverSnapshotAtMs: number) {
+    if (!Number.isFinite(serverSnapshotAtMs)) return;
+    const sample = Date.now() - serverSnapshotAtMs;
+    // Ignore obviously invalid samples (device sleep, bad clock).
+    if (!Number.isFinite(sample) || Math.abs(sample) > 60_000) return;
+    if (this.onlineServerClockOffsetMs == null) {
+      this.onlineServerClockOffsetMs = sample;
+      return;
+    }
+    // Smooth offset so interpolation remains stable under jitter.
+    this.onlineServerClockOffsetMs = THREE.MathUtils.lerp(this.onlineServerClockOffsetMs, sample, 0.08);
+  }
+
+  private getEstimatedOnlineServerNowMs(): number {
+    const localNow = Date.now();
+    if (this.onlineServerClockOffsetMs == null) return localNow;
+    return localNow - this.onlineServerClockOffsetMs;
   }
 
   private consumeOnlineEvents(snapshot: OnlineRaceSnapshot, source: 'local' | 'online') {
@@ -1553,7 +1594,7 @@ export class Game {
   }
 
   private updateEliminatedSpectatorCamera(playerIndex: number, dt: number) {
-    const input = this.inputManager.getInput(playerIndex);
+    const input = this.inputManager.getInput(this.online?.enabled ? 0 : playerIndex);
     const cameraEdges = consumeRaceActionEdges(
       { useItem: !!input.useItem, sacrificeBoost: !!input.drift },
       this.cameraActionPressState[playerIndex],

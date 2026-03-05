@@ -8,7 +8,10 @@
     "build": "tsc",
     "start": "node --experimental-specifier-resolution=node dist/server/src/server.js",
     "test:parity": "tsx src/parity.test.ts",
-    "test:smoke": "tsx src/smoke.test.ts"
+    "test:smoke": "tsx src/smoke.test.ts",
+    "test:ws": "tsx src/ws-lifecycle.test.ts",
+    "test:payments": "tsx src/payment-contract.test.ts",
+    "test:load": "tsx src/authority-load.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.0",

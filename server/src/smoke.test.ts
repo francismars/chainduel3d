@@ -83,11 +83,20 @@ async function run() {
   assert(sessionResult.res.ok, `Session result failed: ${sessionResult.res.status}`);
 
   if (adminSecret) {
+    const login = await request('/api/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: adminSecret }),
+    });
+    assert(login.res.ok, `Admin login failed: ${login.res.status}`);
+    const adminToken = String((login.json as JsonValue)?.token || '');
+    assert(adminToken, 'Admin login response missing token');
+
     const createAdminRoute = await request('/api/admin/routes', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-admin-secret': adminSecret,
+        authorization: `Bearer ${adminToken}`,
       },
       body: JSON.stringify({ name: 'Smoke Admin Route', layout: null }),
     });
@@ -97,7 +106,7 @@ async function run() {
 
     const deleteAdminRoute = await request(`/api/admin/routes/${encodeURIComponent(routeId)}`, {
       method: 'DELETE',
-      headers: { 'x-admin-secret': adminSecret },
+      headers: { authorization: `Bearer ${adminToken}` },
     });
     assert(deleteAdminRoute.res.ok, `Authorized admin route delete failed: ${deleteAdminRoute.res.status}`);
   } else {
