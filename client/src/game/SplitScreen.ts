@@ -10,6 +10,7 @@ export class SplitScreen {
   private width: number;
   private height: number;
   private activePlayers: number[] = [0, 1, 2, 3];
+  private readonly maxPlayers: number;
 
   private renderTargets: THREE.WebGLRenderTarget[];
   private postScene: THREE.Scene;
@@ -17,9 +18,10 @@ export class SplitScreen {
   private composer: EffectComposer;
   private quads: THREE.Mesh[] = [];
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, maxPlayers = 8) {
     this.width = container.clientWidth;
     this.height = container.clientHeight;
+    this.maxPlayers = Math.max(1, maxPlayers | 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setSize(this.width, this.height);
@@ -32,7 +34,7 @@ export class SplitScreen {
 
     this.cameras = [];
     this.renderTargets = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < this.maxPlayers; i++) {
       this.cameras.push(new THREE.PerspectiveCamera(75, aspect, 0.1, 500));
       this.renderTargets.push(new THREE.WebGLRenderTarget(Math.max(1, this.width), Math.max(1, this.height)));
     }
@@ -74,7 +76,7 @@ export class SplitScreen {
   }
 
   setActivePlayers(players: number[]) {
-    const unique = Array.from(new Set(players.filter(p => p >= 0 && p < 4)));
+    const unique = Array.from(new Set(players.filter(p => p >= 0 && p < this.maxPlayers)));
     this.activePlayers = unique.length > 0 ? unique : [0];
     this.updateLayout();
   }

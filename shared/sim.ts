@@ -988,6 +988,7 @@ export function buildSimStartSlotPose(
   lateralOffsets: number[] = [4.2, 1.4, -1.4, -4.2],
   layout: SimRouteLayout | null = null,
 ): SimStartSlotPose {
+  const safeSlotIndex = Math.max(0, slotIndex | 0);
   if (getSimLayoutType(layout) === 'arena' && routePoints.length > 0) {
     let minX = Infinity;
     let maxX = -Infinity;
@@ -1017,9 +1018,14 @@ export function buildSimStartSlotPose(
       { sx: -1, sz: 1 },
       { sx: 1, sz: 1 },
     ];
-    const c = corners[Math.max(0, Math.min(corners.length - 1, slotIndex))];
-    const x = centerX + c.sx * safeRadiusX * 0.68;
-    const z = centerZ + c.sz * safeRadiusZ * 0.68;
+    const ringCols = 4;
+    const row = Math.floor(safeSlotIndex / ringCols);
+    const col = safeSlotIndex % ringCols;
+    const c = corners[col];
+    // Multi-row starts: each additional row moves inward toward center.
+    const ringScale = Math.max(0.42, 0.68 - row * 0.16);
+    const x = centerX + c.sx * safeRadiusX * ringScale;
+    const z = centerZ + c.sz * safeRadiusZ * ringScale;
     const toCenterX = centerX - x;
     const toCenterZ = centerZ - z;
     const heading = Math.atan2(toCenterX, toCenterZ);
@@ -1030,11 +1036,36 @@ export function buildSimStartSlotPose(
     return { x, y: bowlY + 0.5, z, heading };
   }
   const frame = buildSimStartFrame(routePoints, layout);
-  const o = lateralOffsets[slotIndex] ?? (4.2 - slotIndex * 2.8);
+  const sampleCount = Math.max(1, Math.min(12, routePoints.length));
+  let widthAcc = 0;
+  for (let i = 0; i < sampleCount; i++) widthAcc += Math.max(6, routePoints[i]?.width ?? 10);
+  const startWidth = widthAcc / sampleCount;
+  const usableHalfWidth = Math.max(2.2, startWidth * 0.5 - 1.15);
+  const minLaneSpacing = 2.45;
+  let gridCols = 4;
+  while (gridCols > 2) {
+    const requiredHalf = ((gridCols - 1) * 0.5) * minLaneSpacing + 0.5;
+    if (requiredHalf <= usableHalfWidth) break;
+    gridCols -= 1;
+  }
+  const row = Math.floor(safeSlotIndex / gridCols);
+  const col = safeSlotIndex % gridCols;
+  const maxReach = Math.max(0.1, usableHalfWidth - 0.35);
+  const defaultSpacing = gridCols <= 1 ? 0 : (maxReach * 2) / Math.max(1, gridCols - 1);
+  const spacing = Math.max(minLaneSpacing, Math.min(3.15, defaultSpacing));
+  const centeredCol = col - (gridCols - 1) * 0.5;
+  const defaultOffset = centeredCol * spacing;
+  const row0LegacyOffset = lateralOffsets[safeSlotIndex];
+  const o = (row === 0 && Number.isFinite(row0LegacyOffset))
+    ? Math.max(-maxReach, Math.min(maxReach, row0LegacyOffset))
+    : Math.max(-maxReach, Math.min(maxReach, defaultOffset));
+  // Wider starts can afford more front-to-back spacing; tighter starts keep rows compact.
+  const rowSpacing = Math.max(3.0, Math.min(4.8, startWidth * 0.34));
+  const rowBack = row * rowSpacing;
   return {
-    x: frame.x + frame.rightX * o,
+    x: frame.x + frame.rightX * o - frame.dirX * rowBack,
     y: frame.y,
-    z: frame.z + frame.rightZ * o,
+    z: frame.z + frame.rightZ * o - frame.dirZ * rowBack,
     heading: frame.heading,
   };
 }
@@ -1213,7 +1244,7 @@ export function stepRace(
     const rt = state.runtime[i] ?? createDefaultRuntimeState();
     state.runtime[i] = rt;
     p.eliminated = p.chainLength <= 0;
-    if (p.finished || p.eliminated) {
+    if (p.eliminated) {
       p.speed = 0;
       p.speedBoostActive = false;
       p.slowActive = false;
@@ -1230,8 +1261,8 @@ export function stepRace(
     const simInput = inputs[i] ?? { forward: false, backward: false, left: false, right: false, drift: false };
     const balanceAssist = raceBalanceAssistByPlayer?.[i] ?? 1;
     const res = stepPlayerKinematics(p, rt, simInput, dtSec, tuning, balanceAssist);
-    if (res.driftStarted) events.push({ type: 'drift_start', playerIndex: i });
-    if (res.driftEnded) events.push({ type: 'drift_end', playerIndex: i });
+    if (!p.finished && res.driftStarted) events.push({ type: 'drift_start', playerIndex: i });
+    if (!p.finished && res.driftEnded) events.push({ type: 'drift_end', playerIndex: i });
     if (res.driftBoostMs > 0) {
       rt.speedBoostMs = Math.max(rt.speedBoostMs, res.driftBoostMs);
       p.speed = Math.min(p.speed + res.driftBoostSpeed, tuning.maxSpeed * 1.6);
@@ -1425,7 +1456,7 @@ export function stepRace(
     }
 
     const cpCount = state.checkpoints.length;
-    if (cpCount > 0 && mode === 'classic') {
+    if (!p.finished && cpCount > 0 && mode === 'classic') {
       const oldCp = p.lastCheckpoint;
       const next = (oldCp + 1 + cpCount) % cpCount;
       const cp = state.checkpoints[next];

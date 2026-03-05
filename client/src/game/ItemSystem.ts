@@ -28,12 +28,13 @@ export class ItemSystem {
   private scene: THREE.Scene;
   private itemPool: ItemId[] = ['ln_turbo', 'mempool_mine', 'fee_spike', 'sats_siphon', 'nostr_zap'];
 
-  public playerItems: (string | null)[] = [null, null, null, null];
+  public playerItems: (string | null)[];
   private finalLapIntensity = false;
   private localAuthorityEnabled = true;
 
-  constructor(scene: THREE.Scene, positions: THREE.Vector3[]) {
+  constructor(scene: THREE.Scene, positions: THREE.Vector3[], playerCount = 4) {
     this.scene = scene;
+    this.playerItems = new Array(Math.max(1, playerCount | 0)).fill(null);
 
     for (const pos of positions) {
       const group = new THREE.Group();

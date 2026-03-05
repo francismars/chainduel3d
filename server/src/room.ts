@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import sim from '../../shared/sim.js';
 import type { SimInput, SimPlayerRuntimeState, SimRaceEvent, SimRandomState } from '../../shared/sim.js';
 import type { GameMode } from '../../shared/types';
+import type { RuntimeSnapshot } from './persistence.js';
 
 const {
   createDefaultRuntimeState,
@@ -30,6 +31,8 @@ const {
   computePlacements: computeSharedPlacements,
   shouldEndRace: shouldSharedEndRace,
 } = sim;
+
+const MAX_PLAYERS = 8;
 
 export interface RoomSettings {
   laps: number;
@@ -151,6 +154,8 @@ interface CreateRoomRequest {
 
 interface InternalMember extends RoomMember {
   token: string;
+  tokenIssuedAt: number;
+  tokenExpiresAt: number;
   pingMs?: number;
   disconnectedAt?: number;
 }
@@ -265,6 +270,7 @@ interface SimPlayerRuntime extends SimPlayerRuntimeState {
 
 export class RoomManager {
   readonly disconnectGraceMs = 30_000;
+  readonly memberTokenTtlMs = Math.max(5 * 60_000, Number(process.env.ROOM_MEMBER_TOKEN_TTL_MS || 24 * 60 * 60 * 1000));
   private readonly countdownMs = 3000;
   private readonly stealCooldownMsValue = 1100;
   private readonly sacrificeBoostCooldownMs = 2200;
@@ -287,8 +293,8 @@ export class RoomManager {
     const now = Date.now();
     const settings: RoomSettings = {
       laps: Math.max(1, Math.min(9, Math.round(req.settings?.laps ?? 3))),
-      aiCount: Math.max(0, Math.min(4, Math.round(req.settings?.aiCount ?? 3))),
-      maxHumans: 4,
+      aiCount: Math.max(0, Math.min(MAX_PLAYERS, Math.round(req.settings?.aiCount ?? 3))),
+      maxHumans: MAX_PLAYERS,
       chainClasses: this.sanitizeChainClasses(req.settings?.chainClasses),
       routeId: typeof req.settings?.routeId === 'string' && req.settings.routeId.trim()
         ? req.settings.routeId.trim()
@@ -305,6 +311,8 @@ export class RoomManager {
       members: [{
         memberId,
         token: memberToken,
+        tokenIssuedAt: now,
+        tokenExpiresAt: now + this.memberTokenTtlMs,
         name: this.sanitizeMemberName(req.hostName, 'Host'),
         isHost: true,
         slotIndex: req.spectatorHost ? -1 : 0,
@@ -339,6 +347,8 @@ export class RoomManager {
     room.members.push({
       memberId,
       token: memberToken,
+      tokenIssuedAt: Date.now(),
+      tokenExpiresAt: Date.now() + this.memberTokenTtlMs,
       name: this.sanitizeMemberName(name, `Player ${room.members.length + 1}`),
       isHost: false,
       slotIndex,
@@ -361,7 +371,7 @@ export class RoomManager {
     if (room.phase !== 'lobby') throw new Error('Cannot change settings after start');
     room.settings = {
       laps: Math.max(1, Math.min(9, Math.round(settings.laps ?? room.settings.laps))),
-      aiCount: Math.max(0, Math.min(4, Math.round(settings.aiCount ?? room.settings.aiCount))),
+      aiCount: Math.max(0, Math.min(MAX_PLAYERS, Math.round(settings.aiCount ?? room.settings.aiCount))),
       maxHumans: room.settings.maxHumans,
       chainClasses: this.sanitizeChainClasses(settings.chainClasses ?? room.settings.chainClasses),
       routeId: typeof settings.routeId === 'string' && settings.routeId.trim()
@@ -424,7 +434,7 @@ export class RoomManager {
       playerInputs: Array.from({ length: room.settings.maxHumans }, () => null),
       routeId: routeId ?? room.settings.routeId ?? 'default',
       routeLayout: sanitizedLayout,
-      standings: this.makeStandings([0, 1, 2, 3], players),
+      standings: this.makeStandings(Array.from({ length: MAX_PLAYERS }, (_, i) => i), players),
       simSlots,
       simMainTrackPoints: simMainRoutePoints,
       simTrackPoints: simRoutePoints,
@@ -433,8 +443,8 @@ export class RoomManager {
       obstacles: [],
       finalLapIntensity: false,
       rngState,
-      stealCooldownMs: Array.from({ length: 4 }, () => new Array(4).fill(0)),
-      runtime: Array.from({ length: 4 }, () => ({
+      stealCooldownMs: Array.from({ length: MAX_PLAYERS }, () => new Array(MAX_PLAYERS).fill(0)),
+      runtime: Array.from({ length: MAX_PLAYERS }, () => ({
         ...createDefaultRuntimeState(),
         sacrificeCooldownMs: 0,
         prevUseItemPressed: false,
@@ -451,7 +461,7 @@ export class RoomManager {
           active: b.active,
           previewItem: b.previewItem,
         })),
-        standings: this.makeStandings([0, 1, 2, 3], players),
+        standings: this.makeStandings(Array.from({ length: MAX_PLAYERS }, (_, i) => i), players),
         events: [],
         at: Date.now(),
       },
@@ -645,7 +655,47 @@ export class RoomManager {
   validateMember(roomId: string, memberId: string, token: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
-    return room.members.some(m => m.memberId === memberId && m.token === token);
+    const now = Date.now();
+    const member = room.members.find(m => m.memberId === memberId && m.token === token);
+    if (!member) return false;
+    if (member.tokenExpiresAt <= now) return false;
+    // Sliding expiry while actively connected/participating.
+    member.tokenExpiresAt = now + this.memberTokenTtlMs;
+    return true;
+  }
+
+  listSnapshots(): RuntimeSnapshot['rooms'] {
+    return Array.from(this.rooms.values()).map((room) => ({
+      roomId: room.roomId,
+      code: room.code,
+      hostMemberId: room.hostMemberId,
+      phase: room.phase,
+      createdAt: room.createdAt,
+      settings: { ...room.settings },
+      members: room.members.map((member) => ({ ...member })),
+      chat: room.chat.map((message) => ({ ...message })),
+      race: room.race ? JSON.parse(JSON.stringify(room.race)) : undefined,
+    }));
+  }
+
+  restoreSnapshots(rawRooms: RuntimeSnapshot['rooms']) {
+    this.rooms.clear();
+    this.codeToRoomId.clear();
+    for (const rawRoom of rawRooms) {
+      if (!rawRoom || typeof rawRoom !== 'object') continue;
+      const room = rawRoom as InternalRoom;
+      if (!room.roomId || !room.code) continue;
+      this.rooms.set(room.roomId, room);
+      this.codeToRoomId.set(room.code, room.roomId);
+      for (const member of room.members) {
+        if (!Number.isFinite(member.tokenExpiresAt)) {
+          member.tokenExpiresAt = Date.now() + this.memberTokenTtlMs;
+        }
+        if (!Number.isFinite(member.tokenIssuedAt)) {
+          member.tokenIssuedAt = Date.now();
+        }
+      }
+    }
   }
 
   private getInternalValidated(roomId: string, memberId: string, token: string): InternalRoom {
@@ -729,12 +779,12 @@ export class RoomManager {
   }
 
   private computeSimSlots(room: InternalRoom): boolean[] {
-    const slots = [false, false, false, false];
+    const slots = new Array(MAX_PLAYERS).fill(false);
     for (const m of room.members) {
-      if (m.slotIndex >= 0 && m.slotIndex < 4) slots[m.slotIndex] = true;
+      if (m.slotIndex >= 0 && m.slotIndex < MAX_PLAYERS) slots[m.slotIndex] = true;
     }
-    let aiLeft = Math.max(0, Math.min(4, room.settings.aiCount));
-    for (let i = 0; i < 4 && aiLeft > 0; i++) {
+    let aiLeft = Math.max(0, Math.min(MAX_PLAYERS, room.settings.aiCount));
+    for (let i = 0; i < MAX_PLAYERS && aiLeft > 0; i++) {
       if (slots[i]) continue;
       slots[i] = true;
       aiLeft--;
@@ -767,7 +817,7 @@ export class RoomManager {
       speedBoostActive: boolean;
       slowActive: boolean;
     }> = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < MAX_PLAYERS; i++) {
       const slot = buildSharedStartSlotPose(simRoutePoints, i, undefined, layout as any);
       const qy = Math.sin(frame.heading * 0.5);
       const qw = Math.cos(frame.heading * 0.5);
@@ -812,13 +862,13 @@ export class RoomManager {
     ));
     const obstacles = room.race.obstacles ?? (room.race.obstacles = []);
     room.race.finalLapIntensity = shouldEnableSharedFinalLapIntensity(players as Array<{ lap: number; finished: boolean; chainLength: number }>, room.settings.laps);
-    const runtime = room.race.runtime ?? (room.race.runtime = Array.from({ length: 4 }, () => ({
+    const runtime = room.race.runtime ?? (room.race.runtime = Array.from({ length: MAX_PLAYERS }, () => ({
       ...createDefaultRuntimeState(),
       sacrificeCooldownMs: 0,
       prevUseItemPressed: false,
       prevSacrificePressed: false,
     })));
-    const stealCooldownMs = room.race.stealCooldownMs ?? (room.race.stealCooldownMs = Array.from({ length: 4 }, () => new Array(4).fill(0)));
+    const stealCooldownMs = room.race.stealCooldownMs ?? (room.race.stealCooldownMs = Array.from({ length: MAX_PLAYERS }, () => new Array(MAX_PLAYERS).fill(0)));
     const sacrificeCooldownMs = runtime.map(rt => rt.sacrificeCooldownMs);
     const maxSpeedByPlayer = players.map((_, idx) => getSharedChainClassTuning(room.settings.chainClasses[idx] ?? 'balanced').maxSpeed);
     const positions = this.getRacePositions(players, simCheckpoints.length);
@@ -839,19 +889,19 @@ export class RoomManager {
       const p = players[i];
       const rt = runtime[i];
       p.eliminated = p.chainLength <= 0;
-      if (p.finished || p.eliminated) {
+      if (p.eliminated) {
         p.speed = 0;
         p.speedBoostActive = false;
         p.slowActive = false;
         rt.airborne = false;
         rt.vy = 0;
         rt.airborneElapsed = 0;
+        rt.prevUseItemPressed = false;
+        rt.prevSacrificePressed = false;
         continue;
       }
       const member = humanBySlot.get(i);
-      const input = member ? (room.race.playerInputs[i] ?? {
-        forward: false, backward: false, left: false, right: false, drift: false, useItem: false, lookBack: false, sacrificeBoost: false,
-      }) : {
+      const autoPilotInput = {
         ...getSharedAdvancedAiInput(
           p as { x: number; y: number; z: number; heading: number; speed: number; chainLength: number },
           simMainRoutePoints as any,
@@ -867,6 +917,9 @@ export class RoomManager {
         lookBack: false,
         sacrificeBoost: false,
       };
+      const input = (p.finished || !member) ? autoPilotInput : (room.race.playerInputs[i] ?? {
+        forward: false, backward: false, left: false, right: false, drift: false, useItem: false, lookBack: false, sacrificeBoost: false,
+      });
       rt.aiLastWaypointIdx = Math.max(0, rt.aiLastWaypointIdx | 0);
       rt.aiSteerNoise = Math.max(-0.4, Math.min(0.4, rt.aiSteerNoise));
       rt.aiNoiseCooldown = Math.max(0, rt.aiNoiseCooldown);
@@ -881,10 +934,10 @@ export class RoomManager {
       };
 
       const actionEdges = consumeSharedRaceActionEdges({
-        useItem: !!input.useItem,
-        sacrificeBoost: !!input.sacrificeBoost,
+        useItem: !p.finished && !!input.useItem,
+        sacrificeBoost: !p.finished && !!input.sacrificeBoost,
       }, rt);
-      if (actionEdges.sacrificeJustPressed && trySharedSacrificeBoost(
+      if (!p.finished && actionEdges.sacrificeJustPressed && trySharedSacrificeBoost(
         i,
         players as any,
         runtime as any,
@@ -898,10 +951,10 @@ export class RoomManager {
       )) {
         frameEvents.push({ type: 'sacrifice_boost', playerIndex: i });
       }
-      if (actionEdges.useItemJustPressed && p.heldItemId) {
+      if (!p.finished && actionEdges.useItemJustPressed && p.heldItemId) {
         useSharedHeldItem(i, players as any, runtime as any, obstacles as any, room.race.finalLapIntensity, frameEvents, this.getModeMaxBlocks(room.race.mode));
       }
-      if (!member && p.heldItemId && rt.aiItemCooldownMs <= 0 && shouldSharedAiUseItem(i, players as any, p.heldItemId as ItemId, room.race.mode, rng)) {
+      if (!p.finished && !member && p.heldItemId && rt.aiItemCooldownMs <= 0 && shouldSharedAiUseItem(i, players as any, p.heldItemId as ItemId, room.race.mode, rng)) {
         useSharedHeldItem(i, players as any, runtime as any, obstacles as any, room.race.finalLapIntensity, frameEvents, this.getModeMaxBlocks(room.race.mode));
         rt.aiItemCooldownMs = 900 + rng() * 700;
       }
@@ -1008,10 +1061,10 @@ export class RoomManager {
     placementOrder: number[],
     players?: Array<{ eliminated?: boolean }>,
   ): RaceStandings {
-    const rankByPlayer = new Array(4).fill(3);
-    for (let place = 0; place < placementOrder.length && place < 4; place++) {
+    const rankByPlayer = new Array(MAX_PLAYERS).fill(MAX_PLAYERS - 1);
+    for (let place = 0; place < placementOrder.length && place < MAX_PLAYERS; place++) {
       const playerIndex = placementOrder[place] | 0;
-      if (playerIndex >= 0 && playerIndex < 4) rankByPlayer[playerIndex] = place;
+      if (playerIndex >= 0 && playerIndex < MAX_PLAYERS) rankByPlayer[playerIndex] = place;
     }
     const eliminatedOrder = players
       ? placementOrder.filter(idx => players[idx]?.eliminated)
@@ -1020,7 +1073,7 @@ export class RoomManager {
       ? players.filter((p, idx) => !p?.eliminated && placementOrder.includes(idx)).length
       : undefined;
     return {
-      placementOrder: placementOrder.slice(0, 4),
+      placementOrder: placementOrder.slice(0, MAX_PLAYERS),
       rankByPlayer,
       survivors,
       eliminatedOrder,
@@ -1028,9 +1081,9 @@ export class RoomManager {
   }
 
   private sanitizeChainClasses(input: unknown): Array<'balanced' | 'light' | 'heavy'> {
-    const out: Array<'balanced' | 'light' | 'heavy'> = ['balanced', 'balanced', 'balanced', 'balanced'];
+    const out: Array<'balanced' | 'light' | 'heavy'> = Array.from({ length: MAX_PLAYERS }, () => 'balanced');
     if (!Array.isArray(input)) return out;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < MAX_PLAYERS; i++) {
       const v = input[i];
       out[i] = v === 'light' || v === 'heavy' ? v : 'balanced';
     }

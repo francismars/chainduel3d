@@ -21,14 +21,27 @@ export class EscrowManager {
   }> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('Session not found');
+    const existingInvoices = session.players.every((player) => !!player.invoiceBolt11 && !!player.paymentHash);
+    if (existingInvoices) {
+      return {
+        player1: {
+          bolt11: session.players[0].invoiceBolt11!,
+          paymentHash: session.players[0].paymentHash!,
+        },
+        player2: {
+          bolt11: session.players[1].invoiceBolt11!,
+          paymentHash: session.players[1].paymentHash!,
+        },
+      };
+    }
 
     const results: { bolt11: string; paymentHash: string }[] = [];
 
     for (let i = 0; i < 2; i++) {
-      const invoice = await this.lnbits.createInvoice(
+      const invoice = await this.withRetry(() => this.lnbits.createInvoice(
         session.wagerAmount,
         `CHAINDUEL3D deposit - ${session.players[i].name} - Session ${sessionId.slice(0, 8)}`
-      );
+      ));
       this.sessions.updatePlayerPayment(sessionId, i, invoice.paymentHash, invoice.bolt11);
       results.push({ bolt11: invoice.bolt11, paymentHash: invoice.paymentHash });
     }
@@ -57,6 +70,7 @@ export class EscrowManager {
         } catch { /* ignore polling errors */ }
       }
     }, 3000);
+    interval.unref?.();
 
     this.pollIntervals.set(sessionId, interval);
   }
@@ -64,6 +78,15 @@ export class EscrowManager {
   async processWinnerPayout(sessionId: string, winnerId: string): Promise<{ lnurl: string; amount: number }> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('Session not found');
+    if (session.status === 'payout_complete' && session.payoutAmount && session.payoutLnurl) {
+      return {
+        lnurl: session.payoutLnurl,
+        amount: session.payoutAmount,
+      };
+    }
+    if (session.winner && session.winner !== winnerId) {
+      throw new Error('Winner already finalized for this session');
+    }
 
     const totalPot = session.wagerAmount * 2;
     const revenueCut = Math.floor(totalPot * GAME_CONFIG.REVENUE_SPLIT_PERCENT / 100);
@@ -72,17 +95,31 @@ export class EscrowManager {
     this.sessions.setWinner(sessionId, winnerId);
 
     try {
-      const lnurl = await this.lnbits.createLnurlWithdraw(
+      const lnurl = await this.withRetry(() => this.lnbits.createLnurlWithdraw(
         winnerAmount,
         `CHAINDUEL3D winnings - Session ${sessionId.slice(0, 8)}`
-      );
+      ));
 
-      this.sessions.setStatus(sessionId, 'payout_complete');
+      this.sessions.setPayoutResult(sessionId, winnerAmount, lnurl);
 
       return { lnurl, amount: winnerAmount };
     } catch (err) {
       console.error('Failed to create withdrawal link:', err);
       throw new Error('Payout creation failed');
     }
+  }
+
+  private async withRetry<T>(action: () => Promise<T>, retries = 2, baseDelayMs = 250): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await action();
+      } catch (error) {
+        lastError = error;
+        if (attempt >= retries) break;
+        await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Retry attempts exhausted');
   }
 }

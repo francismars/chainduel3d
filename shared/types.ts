@@ -5,6 +5,10 @@ export interface GameSession {
   status: SessionStatus;
   createdAt: number;
   winner?: string;
+  payoutAmount?: number;
+  payoutLnurl?: string | null;
+  payoutCompleteAt?: number;
+  events?: SessionEvent[];
 }
 
 export type PlayMode = 'local' | 'online';
@@ -319,8 +323,15 @@ export interface RaceResultRequest {
 }
 
 export interface PayoutResponse {
-  lnurl: string;
+  lnurl: string | null;
   amount: number;
+}
+
+export interface SessionEvent {
+  id: string;
+  type: string;
+  at: number;
+  details?: Record<string, unknown>;
 }
 
 export type ItemId =
@@ -370,7 +381,7 @@ export const ITEMS: Record<string, ItemType> = {
 
 export const GAME_CONFIG = {
   TOTAL_LAPS: 3,
-  MAX_PLAYERS: 4,
+  MAX_PLAYERS: 8,
   COUNTDOWN_SECONDS: 3,
   REVENUE_SPLIT_PERCENT: 5,
   MIN_WAGER: 100,

@@ -2,6 +2,7 @@ import {
   ChatMessage,
   OnlineRaceSnapshot,
   OnlineRaceInput,
+  GAME_CONFIG,
   GameMode,
   RouteCustomLayout,
   RoomClientMessage,
@@ -24,6 +25,9 @@ export class RoomClient {
   private memberId: string | null = null;
   private memberToken: string | null = null;
   private wsReady = false;
+  private shouldReconnect = true;
+  private reconnectAttempts = 0;
+  private reconnectTimer: number | null = null;
 
   setHandlers(handlers: Handlers) {
     this.handlers = handlers;
@@ -41,6 +45,7 @@ export class RoomClient {
     this.roomId = roomId;
     this.memberId = memberId;
     this.memberToken = memberToken;
+    this.shouldReconnect = true;
   }
 
   async createRoom(
@@ -59,8 +64,8 @@ export class RoomClient {
         settings: {
           laps,
           aiCount,
-          maxHumans: 4,
-          chainClasses: ['balanced', 'balanced', 'balanced', 'balanced'],
+          maxHumans: GAME_CONFIG.MAX_PLAYERS,
+          chainClasses: Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, () => 'balanced'),
           routeId,
           mode,
         },
@@ -217,6 +222,7 @@ export class RoomClient {
 
   leave() {
     if (!this.roomId || !this.memberId || !this.memberToken) return;
+    this.shouldReconnect = false;
     this.send({
       type: 'room_leave',
       roomId: this.roomId,
@@ -226,6 +232,11 @@ export class RoomClient {
   }
 
   disconnect() {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer != null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.wsReady = false;
@@ -250,11 +261,13 @@ export class RoomClient {
       this.ws = ws;
       ws.onopen = () => {
         this.wsReady = true;
+        this.reconnectAttempts = 0;
         resolve();
       };
       ws.onerror = () => reject(new Error('WebSocket connection failed'));
       ws.onclose = () => {
         this.wsReady = false;
+        if (this.shouldReconnect) this.scheduleReconnect();
       };
       ws.onmessage = ev => {
         try {
@@ -278,6 +291,22 @@ export class RoomClient {
   private send(msg: RoomClientMessage) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify(msg));
+  }
+
+  private scheduleReconnect() {
+    if (!this.roomId || !this.memberId || !this.memberToken) return;
+    if (this.reconnectTimer != null) return;
+    const delayMs = Math.min(5000, 500 * Math.max(1, this.reconnectAttempts + 1));
+    this.reconnectAttempts += 1;
+    this.reconnectTimer = window.setTimeout(async () => {
+      this.reconnectTimer = null;
+      try {
+        await this.ensureSocket();
+        this.subscribe();
+      } catch {
+        this.scheduleReconnect();
+      }
+    }, delayMs);
   }
 
   private getRequiredIdentity() {

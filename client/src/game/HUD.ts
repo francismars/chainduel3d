@@ -1,7 +1,7 @@
 import { GAME_CONFIG, GameMode } from 'shared/types';
 
-const POS_LABELS = ['1st', '2nd', '3rd', '4th'];
-const POS_COLORS = ['#ffd54f', '#cfd8dc', '#ffab91', '#90caf9'];
+const POS_LABELS = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'];
+const POS_COLORS = ['#ffd54f', '#cfd8dc', '#ffab91', '#90caf9', '#80cbc4', '#b39ddb', '#ce93d8', '#b0bec5'];
 
 export class HUD {
   private container: HTMLElement;
