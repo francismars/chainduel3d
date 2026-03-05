@@ -13,7 +13,7 @@ import { RaceAuthority } from './race-authority.js';
 import { RouteCatalog } from './routes.js';
 import { RuntimePersistence } from './persistence.js';
 import { Observability } from './observability.js';
-import sharedTypes from '../../shared/types.ts';
+import { SettlementManager } from './settlement.js';
 import type {
   ChainClass,
   GameMode,
@@ -24,8 +24,7 @@ import type {
   KickRoomMemberRequest,
   SetReadyRequest,
   SetRoomNameRequest,
-} from '../../shared/types.ts';
-const { GAME_CONFIG } = sharedTypes;
+} from '../../shared/types.js';
 
 type JoinRoomRequest = { code: string; name: string };
 
@@ -34,6 +33,7 @@ dotenv.config();
 const PORT = parseInt(process.env.PORT || '3000');
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PRODUCTION = NODE_ENV === 'production';
+const MAX_PLAYERS = 8;
 
 const app = express();
 app.use(helmet());
@@ -50,6 +50,13 @@ const adminRateLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many admin requests, please retry later.' },
 });
+const claimRateLimiter = rateLimit({
+  windowMs: 60_000,
+  max: IS_PRODUCTION ? 25 : 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many claim requests, please retry later.' },
+});
 
 // LNBits client
 const lnbits = new LNBitsClient({
@@ -61,6 +68,7 @@ const lnbits = new LNBitsClient({
 const sessions = new SessionManager();
 const escrow = new EscrowManager(lnbits, sessions);
 const rooms = new RoomManager();
+const settlements = new SettlementManager(lnbits);
 const routes = new RouteCatalog();
 const ROUTE_ADMIN_SECRET = process.env.ROUTE_ADMIN_SECRET || '';
 const runtimeStore = new RuntimePersistence(process.env.RUNTIME_STATE_FILE || 'server/data/runtime/state.json');
@@ -204,12 +212,13 @@ app.post('/api/rooms', (req, res) => {
       settings: {
         laps: settings.laps ?? 3,
         aiCount: settings.aiCount ?? 3,
-        maxHumans: GAME_CONFIG.MAX_PLAYERS,
+        maxHumans: MAX_PLAYERS,
         chainClasses: Array.isArray(settings.chainClasses)
-          ? settings.chainClasses.slice(0, GAME_CONFIG.MAX_PLAYERS)
-          : Array.from({ length: GAME_CONFIG.MAX_PLAYERS }, () => 'balanced'),
+          ? settings.chainClasses.slice(0, MAX_PLAYERS)
+          : Array.from({ length: MAX_PLAYERS }, () => 'balanced'),
         routeId: typeof settings.routeId === 'string' ? settings.routeId : 'default',
-        mode: settings.mode === 'derby' ? 'derby' : 'classic',
+        mode: settings.mode === 'derby' ? 'derby' : settings.mode === 'capture_sats' ? 'capture_sats' : 'classic',
+        wager: settings.wager,
       },
       spectatorHost,
     });
@@ -247,14 +256,92 @@ app.get('/api/rooms/:roomId', (req, res) => {
   res.json({ room });
 });
 
+app.post('/api/rooms/:roomId/deposits/create', async (req, res) => {
+  const room = rooms.getState(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: 'Room not found' });
+    return;
+  }
+  const memberId = String(req.body?.memberId || '');
+  const memberToken = String(req.body?.memberToken || '');
+  if (!rooms.validateMember(req.params.roomId, memberId, memberToken)) {
+    res.status(401).json({ error: 'Unauthorized room member' });
+    return;
+  }
+  const wager = room.settings.wager;
+  if (!wager?.enabled || wager.amountSat <= 0 || wager.practiceOnly) {
+    res.status(400).json({ error: 'Wagering not enabled for this room' });
+    return;
+  }
+  let byMember = roomDeposits.get(room.roomId);
+  if (!byMember) {
+    byMember = new Map();
+    roomDeposits.set(room.roomId, byMember);
+  }
+  const existing = byMember.get(memberId);
+  if (existing) {
+    res.json({ invoice: existing });
+    return;
+  }
+  try {
+    const invoice = await lnbits.createInvoice(
+      wager.amountSat,
+      `CHAINDUEL3D room deposit ${room.roomId.slice(0, 8)}`
+    );
+    const payload = {
+      paymentHash: invoice.paymentHash,
+      bolt11: invoice.bolt11,
+      amountSat: wager.amountSat,
+      paid: false,
+    };
+    byMember.set(memberId, payload);
+    persistRuntimeState();
+    res.json({ invoice: payload });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? 'Failed to create deposit invoice' });
+  }
+});
+
+app.get('/api/rooms/:roomId/deposits/status', async (req, res) => {
+  const room = rooms.getState(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: 'Room not found' });
+    return;
+  }
+  const memberId = String(req.query.memberId || '');
+  const memberToken = String(req.query.memberToken || '');
+  if (!rooms.validateMember(req.params.roomId, memberId, memberToken)) {
+    res.status(401).json({ error: 'Unauthorized room member' });
+    return;
+  }
+  const byMember = roomDeposits.get(room.roomId) ?? new Map();
+  for (const [mId, dep] of byMember.entries()) {
+    if (dep.paid) continue;
+    try {
+      const paid = await lnbits.checkPayment(dep.paymentHash);
+      if (paid) dep.paid = true;
+      byMember.set(mId, dep);
+    } catch {
+      // best-effort payment status polling
+    }
+  }
+  roomDeposits.set(room.roomId, byMember);
+  const status = Array.from(byMember.entries()).map(([mId, dep]) => ({
+    memberId: mId,
+    amountSat: dep.amountSat,
+    paid: dep.paid,
+  }));
+  res.json({ deposits: status });
+});
+
 app.post('/api/rooms/:roomId/settings', (req, res) => {
   try {
-    const body = req.body as StartRoomRequest & { settings?: { laps?: number; aiCount?: number; chainClasses?: ChainClass[]; routeId?: string; mode?: GameMode } };
+    const body = req.body as StartRoomRequest & { settings?: { laps?: number; aiCount?: number; chainClasses?: ChainClass[]; routeId?: string; mode?: GameMode; wager?: unknown } };
     const room = rooms.patchSettings(
       req.params.roomId,
       body.memberId,
       body.memberToken,
-      body.settings ?? {},
+      (body.settings ?? {}) as any,
     );
     broadcastRoomState(room.roomId);
     persistRuntimeState();
@@ -272,6 +359,15 @@ app.post('/api/rooms/:roomId/start', (req, res) => {
       return;
     }
     const roomState = rooms.get(req.params.roomId);
+    if (roomState?.settings.wager?.enabled && roomState.settings.wager.amountSat > 0 && !roomState.settings.wager.practiceOnly) {
+      const byMember = roomDeposits.get(req.params.roomId) ?? new Map();
+      const requiredMemberIds = roomState.members.filter(m => m.slotIndex >= 0).map(m => m.memberId);
+      const missing = requiredMemberIds.filter(mId => !byMember.get(mId)?.paid);
+      if (missing.length > 0) {
+        res.status(400).json({ error: 'All active players must complete deposits before race start' });
+        return;
+      }
+    }
     const selectedRouteId = body.routeId ?? roomState?.settings.routeId ?? 'default';
     let resolvedLayout: RouteCustomLayout | null = body.routeLayout ?? null;
     if (selectedRouteId) {
@@ -366,6 +462,76 @@ app.post('/api/rooms/:roomId/rematch', (req, res) => {
     res.json({ room });
   } catch (err: any) {
     res.status(400).json({ error: err?.message ?? 'Rematch failed' });
+  }
+});
+
+app.get('/api/rooms/:roomId/settlement', (req, res) => {
+  const room = rooms.getState(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: 'Room not found' });
+    return;
+  }
+  const memberId = String(req.query.memberId || '');
+  const memberToken = String(req.query.memberToken || '');
+  if (!rooms.validateMember(req.params.roomId, memberId, memberToken)) {
+    res.status(401).json({ error: 'Unauthorized room member' });
+    return;
+  }
+  const summary = settlements.ensureSettlement(room);
+  if (summary) {
+    rooms.setRaceSettlement(room.roomId, summary);
+    persistRuntimeState();
+  }
+  res.json({ settlement: summary });
+});
+
+app.post('/api/rooms/:roomId/settlement/claim', claimRateLimiter, (req, res) => {
+  const roomId = String(req.params.roomId || '');
+  const memberId = String(req.body?.memberId || '');
+  const memberToken = String(req.body?.memberToken || '');
+  if (!rooms.validateMember(roomId, memberId, memberToken)) {
+    res.status(401).json({ error: 'Unauthorized room member' });
+    return;
+  }
+  const room = rooms.getState(roomId);
+  if (!room) {
+    res.status(404).json({ error: 'Room not found' });
+    return;
+  }
+  const summary = settlements.ensureSettlement(room);
+  if (!summary) {
+    res.status(400).json({ error: 'Settlement not ready' });
+    return;
+  }
+  const claim = settlements.issueClaimTicket(roomId, memberId);
+  if (!claim) {
+    res.status(400).json({ error: 'No claimable winnings for this member' });
+    return;
+  }
+  rooms.setRaceSettlement(room.roomId, summary);
+  persistRuntimeState();
+  res.json(claim);
+});
+
+app.post('/api/rooms/:roomId/settlement/withdraw', claimRateLimiter, async (req, res) => {
+  const roomId = String(req.params.roomId || '');
+  const memberId = String(req.body?.memberId || '');
+  const memberToken = String(req.body?.memberToken || '');
+  const claimToken = String(req.body?.claimToken || '');
+  if (!rooms.validateMember(roomId, memberId, memberToken)) {
+    res.status(401).json({ error: 'Unauthorized room member' });
+    return;
+  }
+  if (!claimToken) {
+    res.status(400).json({ error: 'Missing claim token' });
+    return;
+  }
+  try {
+    const payout = await settlements.redeemClaimTicket(claimToken, memberId);
+    persistRuntimeState();
+    res.json(payout);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Withdraw failed' });
   }
 });
 
@@ -482,6 +648,13 @@ const raceAuthority = new RaceAuthority(rooms, (roomId, race) => {
       snapshot,
     });
   }
+  const roomState = rooms.getState(roomId);
+  if (roomState?.phase === 'finished') {
+    const summary = settlements.ensureSettlement(roomState);
+    if (summary) {
+      rooms.setRaceSettlement(roomId, summary);
+    }
+  }
   persistRuntimeState(1200);
 }, ({ activeRooms, loopDurationMs }) => {
   obs.timing('race.tick_loop_ms', loopDurationMs);
@@ -498,6 +671,7 @@ const wsRoom = new Map<WebSocket, { roomId: string; memberId: string; memberToke
 const wsPingSentAt = new Map<WebSocket, number>();
 const wsMsgBucket = new Map<WebSocket, { startedAt: number; count: number }>();
 const raceInputAtByMember = new Map<string, number>();
+const roomDeposits = new Map<string, Map<string, { paymentHash: string; bolt11: string; amountSat: number; paid: boolean }>>();
 
 wss.on('connection', (ws: WebSocket) => {
   wsMsgBucket.set(ws, { startedAt: Date.now(), count: 0 });

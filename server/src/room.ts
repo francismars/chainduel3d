@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import sim from '../../shared/sim.js';
 import type { SimInput, SimPlayerRuntimeState, SimRaceEvent, SimRandomState } from '../../shared/sim.js';
-import type { GameMode } from '../../shared/types';
+import type { GameMode, RoomSettlementSummary, WagerSettings } from '../../shared/types';
 import type { RuntimeSnapshot } from './persistence.js';
 
 const {
@@ -16,6 +16,7 @@ const {
   stepStealCollisions: stepSharedStealCollisions,
   buildSimCheckpoints: buildSharedSimCheckpoints,
   buildSimItemBoxes: buildSharedSimItemBoxes,
+  computeRecommendedItemBoxCount: computeSharedRecommendedItemBoxCount,
   buildSimMainRoutePoints: buildSharedSimMainRoutePoints,
   buildSimRoutePoints: buildSharedSimRoutePoints,
   buildSimStartFrame: buildSharedStartFrame,
@@ -41,6 +42,7 @@ export interface RoomSettings {
   chainClasses: Array<'balanced' | 'light' | 'heavy'>;
   routeId: string;
   mode?: GameMode;
+  wager?: WagerSettings;
 }
 
 export interface RoomMember {
@@ -135,6 +137,9 @@ export interface RoomState {
     routeId?: string;
     routeLayout?: RouteCustomLayout | null;
     standings?: RaceStandings;
+    captureSatsByPlayer?: number[];
+    satsRemaining?: number;
+    settlement?: RoomSettlementSummary;
     finishedAt?: number;
   };
 }
@@ -177,6 +182,9 @@ interface InternalRoom {
     routeId?: string;
     routeLayout?: RouteCustomLayout | null;
     standings?: RaceStandings;
+    captureSatsByPlayer: number[];
+    satsRemaining: number;
+    settlement?: RoomSettlementSummary;
     simSlots: boolean[];
     simMainTrackPoints: SimRoutePoint[];
     simTrackPoints: SimRoutePoint[];
@@ -216,6 +224,8 @@ interface InternalRoom {
         previewItem: ItemId;
       }>;
       standings?: RaceStandings;
+        captureSatsByPlayer?: number[];
+        satsRemaining?: number;
       events?: SimRaceEvent[];
       at: number;
     };
@@ -300,6 +310,7 @@ export class RoomManager {
         ? req.settings.routeId.trim()
         : 'default',
       mode: this.sanitizeMode(req.settings?.mode),
+      wager: this.sanitizeWager(req.settings?.wager),
     };
     const room: InternalRoom = {
       roomId,
@@ -378,6 +389,7 @@ export class RoomManager {
         ? settings.routeId.trim()
         : room.settings.routeId,
       mode: this.sanitizeMode(settings.mode ?? room.settings.mode),
+      wager: this.sanitizeWager(settings.wager ?? room.settings.wager),
     };
     return this.toState(room);
   }
@@ -419,9 +431,10 @@ export class RoomManager {
     const simMainRoutePoints = buildSharedSimMainRoutePoints(sanitizedLayout as any);
     const simRoutePoints = buildSharedSimRoutePoints(sanitizedLayout as any, simMainRoutePoints);
     const simCheckpoints = buildSharedSimCheckpoints(simMainRoutePoints, 14, sanitizedLayout as any);
+    const activePlayerCount = simSlots.filter(Boolean).length;
     const simItemBoxes = buildSharedSimItemBoxes(
       simMainRoutePoints,
-      10,
+      computeSharedRecommendedItemBoxCount(activePlayerCount, sanitizedLayout as any),
       () => rollSharedPreviewItem(() => nextSimRandom(rngState)),
       sanitizedLayout as any,
     );
@@ -435,6 +448,8 @@ export class RoomManager {
       routeId: routeId ?? room.settings.routeId ?? 'default',
       routeLayout: sanitizedLayout,
       standings: this.makeStandings(Array.from({ length: MAX_PLAYERS }, (_, i) => i), players),
+      captureSatsByPlayer: new Array(MAX_PLAYERS).fill(0),
+      satsRemaining: this.sanitizeMode(room.settings.mode) === 'capture_sats' ? simItemBoxes.length : 0,
       simSlots,
       simMainTrackPoints: simMainRoutePoints,
       simTrackPoints: simRoutePoints,
@@ -462,6 +477,8 @@ export class RoomManager {
           previewItem: b.previewItem,
         })),
         standings: this.makeStandings(Array.from({ length: MAX_PLAYERS }, (_, i) => i), players),
+        captureSatsByPlayer: new Array(MAX_PLAYERS).fill(0),
+        satsRemaining: this.sanitizeMode(room.settings.mode) === 'capture_sats' ? simItemBoxes.length : 0,
         events: [],
         at: Date.now(),
       },
@@ -597,12 +614,14 @@ export class RoomManager {
       3,
       room.race.mode,
       room.race.tick * dtSec * 1000,
+      room.race.mode === 'capture_sats' ? (room.race.satsRemaining ?? 0) : undefined,
     );
     room.race.standings = this.makeStandings(
       computeSharedPlacements(
         room.race.authoritative?.players ?? [],
         room.race.simCheckpoints.length || 14,
         room.race.mode,
+        room.race.captureSatsByPlayer ?? [],
       ),
       room.race.authoritative?.players ?? [],
     );
@@ -626,6 +645,13 @@ export class RoomManager {
     return room ? this.toState(room) : null;
   }
 
+  setRaceSettlement(roomId: string, settlement: RoomSettlementSummary): RoomState | null {
+    const room = this.rooms.get(roomId);
+    if (!room?.race) return null;
+    room.race.settlement = settlement;
+    return this.toState(room);
+  }
+
   getAuthoritativeSnapshot(roomId: string) {
     const room = this.rooms.get(roomId);
     if (!room?.race?.authoritative) return null;
@@ -647,6 +673,8 @@ export class RoomManager {
         survivors: auth.standings.survivors,
         eliminatedOrder: auth.standings.eliminatedOrder ? [...auth.standings.eliminatedOrder] : undefined,
       } : undefined,
+      captureSatsByPlayer: auth.captureSatsByPlayer ? [...auth.captureSatsByPlayer] : undefined,
+      satsRemaining: auth.satsRemaining,
       events: auth.events?.map(e => ({ ...e })),
       at: auth.at,
     };
@@ -773,6 +801,9 @@ export class RoomManager {
           survivors: room.race.standings.survivors,
           eliminatedOrder: room.race.standings.eliminatedOrder ? [...room.race.standings.eliminatedOrder] : undefined,
         } : undefined,
+        captureSatsByPlayer: [...(room.race.captureSatsByPlayer ?? new Array(MAX_PLAYERS).fill(0))],
+        satsRemaining: room.race.satsRemaining ?? 0,
+        settlement: room.race.settlement ? JSON.parse(JSON.stringify(room.race.settlement)) : undefined,
         finishedAt: room.race.finishedAt,
       } : undefined,
     };
@@ -821,6 +852,7 @@ export class RoomManager {
       const slot = buildSharedStartSlotPose(simRoutePoints, i, undefined, layout as any);
       const qy = Math.sin(frame.heading * 0.5);
       const qw = Math.cos(frame.heading * 0.5);
+      const active = !!simSlots[i] && totalLaps > 0;
       list.push({
         x: slot.x, y: slot.y, z: slot.z,
         qx: 0, qy, qz: 0, qw,
@@ -831,10 +863,10 @@ export class RoomManager {
         driftCharge: 0,
         lap: 0,
         lastCheckpoint: -1,
-        finished: !simSlots[i] || totalLaps <= 0,
-        finishTime: !simSlots[i] || totalLaps <= 0 ? Number.POSITIVE_INFINITY : 0,
-        eliminated: false,
-        chainLength: this.startBlocks,
+        finished: false,
+        finishTime: 0,
+        eliminated: !active,
+        chainLength: active ? this.startBlocks : 0,
         heldItemId: null,
         speedBoostActive: false,
         slowActive: false,
@@ -856,11 +888,17 @@ export class RoomManager {
     const rng = () => nextSimRandom(rngState);
     const itemBoxes = room.race.itemBoxes ?? (room.race.itemBoxes = buildSharedSimItemBoxes(
       simMainRoutePoints,
-      10,
+      computeSharedRecommendedItemBoxCount(room.race.simSlots.filter(Boolean).length, room.race.routeLayout as any),
       () => rollSharedPreviewItem(rng),
       room.race.routeLayout as any,
     ));
     const obstacles = room.race.obstacles ?? (room.race.obstacles = []);
+    if (!Array.isArray(room.race.captureSatsByPlayer) || room.race.captureSatsByPlayer.length !== MAX_PLAYERS) {
+      room.race.captureSatsByPlayer = new Array(MAX_PLAYERS).fill(0);
+    }
+    if (!Number.isFinite(room.race.satsRemaining)) {
+      room.race.satsRemaining = room.race.mode === 'capture_sats' ? itemBoxes.filter(b => b.active).length : 0;
+    }
     room.race.finalLapIntensity = shouldEnableSharedFinalLapIntensity(players as Array<{ lap: number; finished: boolean; chainLength: number }>, room.settings.laps);
     const runtime = room.race.runtime ?? (room.race.runtime = Array.from({ length: MAX_PLAYERS }, () => ({
       ...createDefaultRuntimeState(),
@@ -881,7 +919,9 @@ export class RoomManager {
       drift: false,
     }));
     const raceAssist: number[] = new Array(players.length).fill(1);
-    stepSharedItemBoxes(itemBoxes as any, dt, room.race.finalLapIntensity, rng);
+    if (room.race.mode !== 'capture_sats') {
+      stepSharedItemBoxes(itemBoxes as any, dt, room.race.finalLapIntensity, rng);
+    }
     stepSharedObstacles(obstacles as any, players as any, dt);
 
     for (let i = 0; i < players.length; i++) {
@@ -995,7 +1035,11 @@ export class RoomManager {
       const p = players[i];
       const rt = runtime[i];
       rt.sacrificeCooldownMs = sacrificeCooldownMs[i];
-      collectSharedNearbyItem(i, players as any, itemBoxes as any, room.race.finalLapIntensity);
+      const picked = collectSharedNearbyItem(i, players as any, itemBoxes as any, room.race.finalLapIntensity, runtime as any);
+      if (room.race.mode === 'capture_sats' && picked) {
+        room.race.captureSatsByPlayer[i] = (room.race.captureSatsByPlayer[i] ?? 0) + 1;
+        room.race.satsRemaining = Math.max(0, (room.race.satsRemaining ?? 0) - 1);
+      }
       p.speedBoostActive = rt.speedBoostMs > 0;
       p.slowActive = rt.slowMs > 0;
       p.eliminated = p.chainLength <= 0;
@@ -1023,7 +1067,7 @@ export class RoomManager {
       if (p.eliminated) p.speed = 0;
     }
     room.race.standings = this.makeStandings(
-      computeSharedPlacements(players, simCheckpoints.length, room.race.mode),
+      computeSharedPlacements(players, simCheckpoints.length, room.race.mode, room.race.captureSatsByPlayer ?? []),
       players,
     );
     room.race.authoritative.tick = room.race.tick;
@@ -1039,6 +1083,8 @@ export class RoomManager {
       placementOrder: [...room.race.standings.placementOrder],
       rankByPlayer: [...room.race.standings.rankByPlayer],
     } : undefined;
+    room.race.authoritative.captureSatsByPlayer = [...(room.race.captureSatsByPlayer ?? new Array(MAX_PLAYERS).fill(0))];
+    room.race.authoritative.satsRemaining = room.race.satsRemaining ?? 0;
     room.race.authoritative.events = [...step.events, ...frameEvents];
     room.race.authoritative.at = Date.now();
   }
@@ -1091,7 +1137,32 @@ export class RoomManager {
   }
 
   private sanitizeMode(input: unknown): GameMode {
-    return input === 'derby' ? 'derby' : 'classic';
+    if (input === 'derby') return 'derby';
+    if (input === 'capture_sats') return 'capture_sats';
+    return 'classic';
+  }
+
+  private sanitizeWager(input: unknown): WagerSettings | undefined {
+    if (!input || typeof input !== 'object') return undefined;
+    const v = input as Partial<WagerSettings>;
+    const enabled = !!v.enabled;
+    const amountSat = Math.max(0, Math.min(5_000_000, Math.round(Number(v.amountSat) || 0)));
+    const mode = v.mode === 'capture_sats' ? 'capture_sats' : 'for_keeps';
+    const winnerCount = v.winnerCount === 2 || v.winnerCount === 3 ? v.winnerCount : 1;
+    const rankWeightsRaw = Array.isArray(v.rankWeights) ? v.rankWeights : [];
+    const rankWeights = rankWeightsRaw
+      .map((n) => Number(n))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(0, 3);
+    const defaultWeights = winnerCount === 1 ? [1] : winnerCount === 2 ? [0.7, 0.3] : [0.6, 0.3, 0.1];
+    return {
+      enabled,
+      practiceOnly: !!v.practiceOnly,
+      amountSat,
+      mode,
+      winnerCount,
+      rankWeights: rankWeights.length >= winnerCount ? rankWeights : defaultWeights,
+    };
   }
 
   private sanitizeMemberName(input: unknown, fallback: string): string {

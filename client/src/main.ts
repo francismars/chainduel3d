@@ -121,6 +121,13 @@ class ChainDuel3DApp {
   private sponsorPreviewLoading = false;
   private gameMode: GameMode = 'classic';
   private lastRaceItemStats: RaceItemStats[] = [];
+  private bootLoading = true;
+  private bootLoadFailed = false;
+  private loadingOverlayEl: HTMLDivElement | null = null;
+  private loadingTitleEl: HTMLDivElement | null = null;
+  private loadingSubEl: HTMLDivElement | null = null;
+  private loadingShownAt = 0;
+  private inFlightActions = new Set<string>();
 
   constructor() {
     this.container = document.getElementById('app')!;
@@ -142,12 +149,106 @@ class ChainDuel3DApp {
         }
       },
       onMemberPing: (roomId, memberId, pingMs) => this.onMemberPing(roomId, memberId, pingMs),
+      onConnectionState: state => {
+        if (this.state !== 'online_entry' && this.state !== 'online_room') return;
+        if (state === 'connecting') this.onlineLobbyUI.setStatus('Connecting to lobby server...');
+        if (state === 'connected') this.onlineLobbyUI.setStatus('Connected. Subscribing to room...');
+        if (state === 'subscribing') this.onlineLobbyUI.setStatus('Subscribing to room updates...');
+        if (state === 'subscribed') this.onlineLobbyUI.setStatus('Lobby synced.');
+        if (state === 'reconnecting') this.onlineLobbyUI.setStatus('Reconnecting...');
+      },
       onError: msg => this.onlineLobbyUI.setStatus(msg),
     });
     const url = new URL(window.location.href);
     this.onlineInviteCodeFromUrl = url.searchParams.get('room');
     void this.refreshRoutes();
     this.showModeMenu();
+  }
+
+  private showGlobalLoading(message: string, subMessage = '') {
+    if (!this.loadingOverlayEl) {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `
+        position:absolute; inset:0; z-index:200; display:flex; align-items:center; justify-content:center;
+        background:rgba(0,0,0,0.66); backdrop-filter: blur(2px);
+      `;
+      const card = document.createElement('div');
+      card.style.cssText = `
+        min-width:min(420px,88vw); border:1px solid #2f2f2f; border-radius:10px; background:#090909;
+        padding:16px 18px; color:#efefef; font-family:${UI_FONT_FAMILY}; box-shadow:0 0 26px rgba(255,255,255,0.1);
+      `;
+      const title = document.createElement('div');
+      title.style.cssText = 'font-size:15px;font-weight:700;letter-spacing:0.8px;color:#fff;';
+      const sub = document.createElement('div');
+      sub.style.cssText = 'margin-top:6px;font-size:12px;color:#9f9f9f;min-height:16px;';
+      const spinner = document.createElement('div');
+      spinner.style.cssText = `
+        width:24px;height:24px;border-radius:50%;margin-top:12px;
+        border:2px solid #2f2f2f;border-top-color:#f0f0f0;animation:chainduelSpin 0.85s linear infinite;
+      `;
+      const style = document.createElement('style');
+      style.textContent = '@keyframes chainduelSpin { to { transform: rotate(360deg); } }';
+      card.appendChild(title);
+      card.appendChild(sub);
+      card.appendChild(spinner);
+      card.appendChild(style);
+      overlay.appendChild(card);
+      this.container.appendChild(overlay);
+      this.loadingOverlayEl = overlay;
+      this.loadingTitleEl = title;
+      this.loadingSubEl = sub;
+    }
+    this.loadingShownAt = Date.now();
+    if (this.loadingTitleEl) this.loadingTitleEl.textContent = message;
+    if (this.loadingSubEl) this.loadingSubEl.textContent = subMessage;
+  }
+
+  private updateGlobalLoading(message: string, subMessage = '') {
+    if (!this.loadingOverlayEl) {
+      this.showGlobalLoading(message, subMessage);
+      return;
+    }
+    if (this.loadingTitleEl) this.loadingTitleEl.textContent = message;
+    if (this.loadingSubEl) this.loadingSubEl.textContent = subMessage;
+  }
+
+  private async hideGlobalLoading() {
+    const minVisibleMs = 250;
+    const elapsed = Date.now() - this.loadingShownAt;
+    if (elapsed < minVisibleMs) {
+      await new Promise(resolve => setTimeout(resolve, minVisibleMs - elapsed));
+    }
+    this.loadingOverlayEl?.remove();
+    this.loadingOverlayEl = null;
+    this.loadingTitleEl = null;
+    this.loadingSubEl = null;
+  }
+
+  private async runWithLoading<T>(
+    actionId: string,
+    title: string,
+    task: () => Promise<T>,
+    opts?: { subMessage?: string; timeoutMs?: number; timeoutMessage?: string; onTimeout?: () => void },
+  ): Promise<T> {
+    if (this.inFlightActions.has(actionId)) {
+      throw new Error('Action already in progress');
+    }
+    this.inFlightActions.add(actionId);
+    this.showGlobalLoading(title, opts?.subMessage ?? '');
+    let timeoutId: number | null = null;
+    if ((opts?.timeoutMs ?? 0) > 0) {
+      timeoutId = window.setTimeout(() => {
+        this.updateGlobalLoading(title, opts?.timeoutMessage ?? 'Still working... server is taking longer than usual.');
+        opts?.onTimeout?.();
+      }, opts?.timeoutMs);
+    }
+    try {
+      return await task();
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      this.inFlightActions.delete(actionId);
+      await this.hideGlobalLoading();
+    }
   }
 
   private showModeMenu() {
@@ -213,6 +314,14 @@ class ChainDuel3DApp {
     howBtn.style.cssText = this.modeBtnCss(false);
     howBtn.onclick = () => this.showHowToPlay();
     card.appendChild(howBtn);
+    if (this.bootLoading || this.bootLoadFailed) {
+      const bootStatus = document.createElement('div');
+      bootStatus.style.cssText = 'margin-top:10px;font-size:12px;color:#9f9f9f;min-height:18px;';
+      bootStatus.textContent = this.bootLoading
+        ? 'Loading game shell...'
+        : 'Using offline defaults. Route service unavailable.';
+      card.appendChild(bootStatus);
+    }
     const style = document.createElement('style');
     style.textContent = `
       @keyframes pulse {
@@ -325,13 +434,22 @@ class ChainDuel3DApp {
         try {
           this.selectedRouteId = 'default';
           this.gameMode = 'classic';
-          const created = await this.roomClient.createRoom(
-            name,
-            GAME_CONFIG.TOTAL_LAPS,
-            2,
-            false,
-            this.selectedRouteId,
-            this.gameMode,
+          const created = await this.runWithLoading(
+            'online:create-room',
+            'Creating room...',
+            () => this.roomClient.createRoom(
+              name,
+              GAME_CONFIG.TOTAL_LAPS,
+              2,
+              false,
+              this.selectedRouteId,
+              this.gameMode,
+            ),
+            {
+              subMessage: 'Allocating lobby and opening socket...',
+              timeoutMs: 4000,
+              timeoutMessage: 'Still working... server is taking longer than usual.',
+            },
           );
           this.onlineMemberId = created.memberId;
           this.showOnlineRoom(created.room);
@@ -346,7 +464,16 @@ class ChainDuel3DApp {
           return;
         }
         try {
-          const joined = await this.roomClient.joinRoom(joinCode, name);
+          const joined = await this.runWithLoading(
+            'online:join-room',
+            'Joining room...',
+            () => this.roomClient.joinRoom(joinCode, name),
+            {
+              subMessage: 'Verifying code and syncing room...',
+              timeoutMs: 4000,
+              timeoutMessage: 'Still working... server is taking longer than usual.',
+            },
+          );
           this.onlineMemberId = joined.memberId;
           this.showOnlineRoom(joined.room);
         } catch (err: any) {
@@ -369,12 +496,49 @@ class ChainDuel3DApp {
         this.clearInviteQueryParam();
         this.showModeMenu();
       },
-      onPatchSettings: s => this.roomClient.patchSettings(s),
-      onStart: () => this.roomClient.startRace(null, room.settings.routeId),
+      onPatchSettings: async s => {
+        await this.runWithLoading(
+          'online:patch-settings',
+          'Saving settings...',
+          () => this.roomClient.patchSettings(s),
+          { timeoutMs: 4000, timeoutMessage: 'Still saving settings...' },
+        );
+      },
+      onStart: async () => {
+        await this.runWithLoading(
+          'online:start-race',
+          'Starting race...',
+          () => this.roomClient.startRace(null, room.settings.routeId),
+          { timeoutMs: 4000, timeoutMessage: 'Still starting race...' },
+        );
+      },
       onSendChat: txt => this.roomClient.sendChat(txt),
-      onKick: memberId => this.roomClient.kickMember(memberId),
-      onSetReady: ready => this.roomClient.setReady(ready),
-      onSetName: name => this.roomClient.setName(name),
+      onKick: async memberId => {
+        await this.runWithLoading(
+          `online:kick:${memberId}`,
+          'Removing player...',
+          () => this.roomClient.kickMember(memberId),
+          { timeoutMs: 4000, timeoutMessage: 'Still removing player...' },
+        );
+      },
+      onSetReady: async ready => {
+        await this.runWithLoading(
+          'online:set-ready',
+          ready ? 'Marking ready...' : 'Marking unready...',
+          () => this.roomClient.setReady(ready),
+          { timeoutMs: 4000, timeoutMessage: 'Still updating ready state...' },
+        );
+      },
+      onSetName: async name => {
+        await this.runWithLoading(
+          'online:set-name',
+          'Updating name...',
+          () => this.roomClient.setName(name),
+          { timeoutMs: 4000, timeoutMessage: 'Still updating name...' },
+        );
+      },
+      onCreateDeposit: () => this.roomClient.createDepositInvoice(),
+      onRefreshDeposits: () => this.roomClient.getDepositStatus(),
     });
   }
 
@@ -402,7 +566,16 @@ class ChainDuel3DApp {
       this.state = 'payment';
       this.container.innerHTML = '';
       try {
-        const data = await this.sessionApi.createSession(wager, playerNames);
+        const data = await this.runWithLoading(
+          'payment:create-session',
+          'Creating payment session...',
+          () => this.sessionApi.createSession(wager, playerNames),
+          {
+            subMessage: 'Requesting invoice from server...',
+            timeoutMs: 4000,
+            timeoutMessage: 'Still working... server is taking longer than usual.',
+          },
+        );
         this.sessionId = data.sessionId;
         const paid = await this.paymentUI.show(data);
         if (!paid) {
@@ -419,23 +592,37 @@ class ChainDuel3DApp {
   }
 
   private async startRace() {
-    const routeLayout = await this.resolveRouteLayout(this.selectedRouteId);
-    this.state = 'racing';
-    this.container.innerHTML = '';
-    this.game = new Game(
-      this.container,
-      this.playerNames,
-      this.isAI,
-      this.chainClasses,
-      this.totalLaps,
-      undefined,
-      routeLayout,
-      SPONSOR_LOGO_URLS,
-      this.gameMode,
-      this.localActiveSlots,
-      this.onRaceFinished.bind(this),
+    await this.runWithLoading(
+      'local:start-race',
+      'Loading route...',
+      async () => {
+        const routeLayout = await this.resolveRouteLayout(this.selectedRouteId);
+        this.updateGlobalLoading('Building arena...', 'Preparing scene and track geometry...');
+        this.state = 'racing';
+        this.container.innerHTML = '';
+        this.game = new Game(
+          this.container,
+          this.playerNames,
+          this.isAI,
+          this.chainClasses,
+          this.totalLaps,
+          undefined,
+          routeLayout,
+          SPONSOR_LOGO_URLS,
+          this.gameMode,
+          this.localActiveSlots,
+          this.onRaceFinished.bind(this),
+        );
+        this.updateGlobalLoading('Preparing racers...', 'Finalizing physics and HUD...');
+        this.game.start();
+        this.updateGlobalLoading('Starting countdown...', 'Race starts in a moment.');
+      },
+      {
+        subMessage: 'Fetching route layout...',
+        timeoutMs: 4500,
+        timeoutMessage: 'Still working... route loading is taking longer than usual.',
+      },
     );
-    this.game.start();
   }
 
   private startOnlineRace(room: RoomState) {
@@ -542,6 +729,31 @@ class ChainDuel3DApp {
       } catch { /* fall through to simple result */ }
     }
 
+    if (isOnlineFlow && this.onlineRoom && this.onlineMemberId) {
+      let payoutAmount = 0;
+      let payoutLnurl: string | null = null;
+      try {
+        const claim = await this.roomClient.createClaimTicket();
+        payoutAmount = claim.amountSat;
+        const payout = await this.roomClient.redeemClaimTicket(claim.claimToken);
+        payoutAmount = payout.amount;
+        payoutLnurl = payout.lnurl;
+      } catch {
+        // No winnings for this member or settlement not enabled.
+      }
+      this.resultUI.show(
+        winnerName,
+        top3Names,
+        payoutAmount,
+        payoutLnurl,
+        () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
+        this.gameMode,
+        this.lastRaceItemStats,
+        this.playerNames,
+      );
+      return;
+    }
+
     this.resultUI.show(
       winnerName,
       top3Names,
@@ -560,7 +772,12 @@ class ChainDuel3DApp {
       return;
     }
     try {
-      const res = await this.roomClient.rematch();
+      const res = await this.runWithLoading(
+        'online:rematch',
+        'Syncing rematch...',
+        () => this.roomClient.rematch(),
+        { timeoutMs: 4000, timeoutMessage: 'Still syncing rematch...' },
+      );
       this.onlineRoom = res.room;
       this.showOnlineRoom(res.room);
     } catch (err: any) {
@@ -570,8 +787,13 @@ class ChainDuel3DApp {
   }
 
   private async refreshRoutes() {
+    this.bootLoading = true;
+    this.bootLoadFailed = false;
+    if (this.state === 'mode') this.showModeMenu();
     try {
-      const res = await fetch('/api/routes');
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
+      const res = await fetch('/api/routes', { signal: controller.signal }).finally(() => clearTimeout(timer));
       if (!res.ok) return;
       const data = await res.json() as { routes?: Array<{ id: string; name: string }> };
       const routes = Array.isArray(data.routes) && data.routes.length > 0
@@ -582,13 +804,22 @@ class ChainDuel3DApp {
       this.lobbyUI.setRoutes(this.routes);
       this.onlineLobbyUI.setRoutes(this.routes);
     } catch {
+      this.bootLoadFailed = true;
       // Keep defaults offline.
+    } finally {
+      this.bootLoading = false;
+      if (this.state === 'mode') this.showModeMenu();
     }
   }
 
   private async resolveRouteLayout(routeId: string): Promise<RouteCustomLayout | null> {
     try {
-      const res = await fetch(`/api/routes/${encodeURIComponent(routeId || 'default')}`);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
+      const res = await fetch(
+        `/api/routes/${encodeURIComponent(routeId || 'default')}`,
+        { signal: controller.signal },
+      ).finally(() => clearTimeout(timer));
       if (!res.ok) return null;
       const data = await res.json() as { route?: RouteDefinition };
       return data.route?.layout ?? null;
@@ -634,6 +865,27 @@ class ChainDuel3DApp {
     const status = document.createElement('div');
     status.style.cssText = 'min-height:18px;color:#9b9b9b;font-size:12px;margin:8px 0 12px;';
     card.appendChild(status);
+    const setAdminStatus = (text: string) => {
+      status.textContent = text;
+    };
+    const runAdminLoading = async <T,>(
+      actionId: string,
+      title: string,
+      task: () => Promise<T>,
+      timeoutMessage = 'Still working... server is taking longer than usual.',
+    ) => {
+      setAdminStatus(title);
+      return this.runWithLoading(
+        actionId,
+        title,
+        task,
+        {
+          timeoutMs: 4000,
+          timeoutMessage,
+          onTimeout: () => setAdminStatus(timeoutMessage),
+        },
+      );
+    };
     const sponsorDetails = document.createElement('details');
     sponsorDetails.style.cssText = 'margin-bottom:12px;border:1px solid #2f2f2f;border-radius:6px;background:#0d0d0d;';
     const sponsorSummary = document.createElement('summary');
@@ -717,7 +969,12 @@ class ChainDuel3DApp {
     loadSelectedBtn.onclick = async () => {
       const selectedId = routeSelect.value || 'default';
       try {
-        const res = await fetch(`/api/routes/${encodeURIComponent(selectedId)}`);
+        const res = await runAdminLoading(
+          `admin:load-route:${selectedId}`,
+          'Loading selected route...',
+          () => fetch(`/api/routes/${encodeURIComponent(selectedId)}`),
+          'Still loading selected route...',
+        );
         if (!res.ok) {
           status.textContent = `Load failed: ${res.status}`;
           return;
@@ -762,16 +1019,26 @@ class ChainDuel3DApp {
       const url = `/api/admin/routes/${encodeURIComponent(selectedId)}`;
       let headers: Record<string, string>;
       try {
-        headers = await getAdminAuthHeaders(true);
+        headers = await runAdminLoading(
+          'admin:login:update',
+          'Authenticating admin...',
+          () => getAdminAuthHeaders(true),
+          'Still authenticating admin...',
+        );
       } catch (err: any) {
         status.textContent = err?.message ?? 'Admin login failed.';
         return;
       }
-      const res = await fetch(url, {
-        method,
-        headers,
-        body: JSON.stringify(payload),
-      });
+      const res = await runAdminLoading(
+        `admin:update-route:${selectedId}`,
+        'Saving route...',
+        () => fetch(url, {
+          method,
+          headers,
+          body: JSON.stringify(payload),
+        }),
+        'Still saving route...',
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));
         status.textContent = `Save failed: ${res.status} ${err.error ?? ''}`.trim();
@@ -804,16 +1071,26 @@ class ChainDuel3DApp {
       }
       let headers: Record<string, string>;
       try {
-        headers = await getAdminAuthHeaders(true);
+        headers = await runAdminLoading(
+          'admin:login:publish',
+          'Authenticating admin...',
+          () => getAdminAuthHeaders(true),
+          'Still authenticating admin...',
+        );
       } catch (err: any) {
         status.textContent = err?.message ?? 'Admin login failed.';
         return;
       }
-      const res = await fetch('/api/admin/routes', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
+      const res = await runAdminLoading(
+        'admin:publish-route',
+        'Publishing route...',
+        () => fetch('/api/admin/routes', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+        }),
+        'Still publishing route...',
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));
         status.textContent = `Publish failed: ${res.status} ${err.error ?? ''}`.trim();
@@ -840,15 +1117,25 @@ class ChainDuel3DApp {
       }
       let headers: Record<string, string>;
       try {
-        headers = await getAdminAuthHeaders(false);
+        headers = await runAdminLoading(
+          'admin:login:delete',
+          'Authenticating admin...',
+          () => getAdminAuthHeaders(false),
+          'Still authenticating admin...',
+        );
       } catch (err: any) {
         status.textContent = err?.message ?? 'Admin login failed.';
         return;
       }
-      const res = await fetch(`/api/admin/routes/${encodeURIComponent(selectedId)}`, {
-        method: 'DELETE',
-        headers,
-      });
+      const res = await runAdminLoading(
+        `admin:delete-route:${selectedId}`,
+        'Deleting route...',
+        () => fetch(`/api/admin/routes/${encodeURIComponent(selectedId)}`, {
+          method: 'DELETE',
+          headers,
+        }),
+        'Still deleting route...',
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));
         status.textContent = `Delete failed: ${res.status} ${err.error ?? ''}`.trim();

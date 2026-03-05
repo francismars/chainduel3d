@@ -23,6 +23,10 @@ Create protected GitHub Environment `production` with required reviewers for the
 - Admin route API now requires bearer tokens from `POST /api/admin/auth/login`.
 - Session endpoints support optional `x-idempotency-key`. Existing clients that do not send idempotency keys are still accepted.
 - Room/session runtime persistence is enabled by default at `server/data/runtime/state.json`. Ensure this path is on persistent storage in staging and production.
+- Room wagering now supports:
+  - deposits per room member (`/api/rooms/:roomId/deposits/create`, `/api/rooms/:roomId/deposits/status`)
+  - server-authoritative settlement claims (`/api/rooms/:roomId/settlement*`)
+  - one-time claim ticket redemption for LNURL withdraw
 
 ## 3) VM Directory Layout
 
@@ -114,6 +118,7 @@ SMOKE_BASE_URL=https://3d.chainduel.net SMOKE_ADMIN_SECRET=<admin_secret> npm ru
 
 ```bash
 npm run test:payments --workspace=server
+npm run test:settlement --workspace=server
 npm run test:ws --workspace=server
 ```
 

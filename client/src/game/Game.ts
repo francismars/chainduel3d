@@ -17,6 +17,7 @@ import {
   buildSimRoutePoints,
   buildSimCheckpoints,
   buildSimItemBoxes,
+  computeRecommendedItemBoxCount,
   collectNearbyItem,
   getAdvancedAiInput,
   getChainClassTuning,
@@ -144,6 +145,8 @@ export class Game {
     denied: 0,
   }));
   private lastHeldItems: Array<ItemId | null> = new Array(NUM_PLAYERS).fill(null);
+  private captureSatsByPlayer: number[] = new Array(NUM_PLAYERS).fill(0);
+  private captureSatsRemaining = 0;
 
   constructor(
     container: HTMLElement,
@@ -221,10 +224,11 @@ export class Game {
     this.initLocalSimRouteData();
     this.localSimItemBoxes = buildSimItemBoxes(
       this.localSimRouteMain,
-      10,
+      computeRecommendedItemBoxCount(this.getActivePlayerCount(), this.raceRouteLayout as any),
       () => rollPreviewItem(() => nextSimRandom(this.localSimRngState)),
       this.raceRouteLayout as any,
     );
+    this.captureSatsRemaining = this.gameMode === 'capture_sats' ? this.localSimItemBoxes.length : 0;
 
     this.karts = [];
     for (let i = 0; i < NUM_PLAYERS; i++) {
@@ -245,8 +249,11 @@ export class Game {
         if (this.activeSlots[i]) continue;
         const kart = this.karts[i];
         while (kart.getChainLength() > 0) kart.loseBlock();
-        kart.finished = true;
-        kart.finishTime = Number.POSITIVE_INFINITY;
+        // Unused slots must behave as eliminated racers, not finishers,
+        // so they don't appear in live standings/placement logic.
+        kart.finished = false;
+        kart.finishTime = 0;
+        kart.mesh.visible = false;
       }
     }
 
@@ -287,6 +294,12 @@ export class Game {
     this.sampleOnlineServerClockOffset(snapshot.at);
     if (snapshot.standings?.placementOrder) {
       this.setOnlineStandings(snapshot.standings.placementOrder);
+    }
+    if (Array.isArray(snapshot.captureSatsByPlayer)) {
+      this.captureSatsByPlayer = [...snapshot.captureSatsByPlayer];
+    }
+    if (typeof snapshot.satsRemaining === 'number') {
+      this.captureSatsRemaining = snapshot.satsRemaining;
     }
   }
 
@@ -374,6 +387,10 @@ export class Game {
     return humans.length > 0 ? humans.slice(0, 4) : [0];
   }
 
+  private getActivePlayerCount(): number {
+    return this.activeSlots.reduce((acc, v) => acc + (v ? 1 : 0), 0);
+  }
+
   private initLocalSimRouteData() {
     const layout = this.raceRouteLayout as {
       main: Array<{ x: number; z: number; w: number; e: number; ramp?: boolean; boost?: boolean }>;
@@ -400,10 +417,12 @@ export class Game {
     this.localSimObstacles = [];
     this.localSimItemBoxes = buildSimItemBoxes(
       this.localSimRouteMain,
-      10,
+      computeRecommendedItemBoxCount(this.getActivePlayerCount(), this.raceRouteLayout as any),
       () => rollPreviewItem(() => nextSimRandom(this.localSimRngState)),
       this.raceRouteLayout as any,
     );
+    this.captureSatsByPlayer = new Array(NUM_PLAYERS).fill(0);
+    this.captureSatsRemaining = this.gameMode === 'capture_sats' ? this.localSimItemBoxes.length : 0;
     this.btcPollTimerMs = 250;
     this.itemStats = Array.from({ length: NUM_PLAYERS }, (_, playerIndex) => ({
       playerIndex,
@@ -720,7 +739,9 @@ export class Game {
     const frameEvents: OnlineRaceEvent[] = [];
     const rng = () => nextSimRandom(this.localSimRngState);
     this.updateFinalLapIntensity();
-    stepItemBoxes(this.localSimItemBoxes, dt, this.finalLapIntensityActive, rng);
+    if (this.gameMode !== 'capture_sats') {
+      stepItemBoxes(this.localSimItemBoxes, dt, this.finalLapIntensityActive, rng);
+    }
     const prevLaps = this.karts.map(k => k.lap);
     const prevFinished = this.karts.map(k => k.finished);
     const preStepPositions = this.getPositions();
@@ -879,7 +900,7 @@ export class Game {
       if (!this.activeSlots[i]) {
         this.chainLengths[i] = 0;
         this.eliminated[i] = true;
-        this.karts[i].finished = true;
+        this.karts[i].finished = false;
         continue;
       }
       const p = step.state.players[i];
@@ -938,7 +959,17 @@ export class Game {
     });
     for (let i = 0; i < NUM_PLAYERS; i++) {
       const prevHeld = this.normalizeItemId(this.itemSystem.playerItems[i]);
-      collectNearbyItem(i, postStepItemPlayers as any, this.localSimItemBoxes, this.finalLapIntensityActive);
+      const collected = collectNearbyItem(
+        i,
+        postStepItemPlayers as any,
+        this.localSimItemBoxes,
+        this.finalLapIntensityActive,
+        this.localSimRuntime as any,
+      );
+      if (this.gameMode === 'capture_sats' && collected) {
+        this.captureSatsByPlayer[i] = (this.captureSatsByPlayer[i] ?? 0) + 1;
+        this.captureSatsRemaining = Math.max(0, this.captureSatsRemaining - 1);
+      }
       this.itemSystem.playerItems[i] = postStepItemPlayers[i].heldItemId;
       const nextHeld = this.normalizeItemId(this.itemSystem.playerItems[i]);
       if (!prevHeld && nextHeld) this.registerPickup(i, nextHeld);
@@ -973,6 +1004,7 @@ export class Game {
       })),
       this.localSimCheckpoints.length,
       this.gameMode,
+      this.captureSatsByPlayer,
     );
     const rankByPlayer = new Array(NUM_PLAYERS).fill(NUM_PLAYERS - 1);
     for (let place = 0; place < placementOrder.length && place < NUM_PLAYERS; place++) {
@@ -1018,6 +1050,8 @@ export class Game {
         lifetimeMs: o.lifetimeMs,
       })),
       standings: { placementOrder, rankByPlayer },
+      captureSatsByPlayer: [...this.captureSatsByPlayer],
+      satsRemaining: this.captureSatsRemaining,
       events: [...step.events, ...frameEvents],
       at: Date.now(),
     };
@@ -1731,6 +1765,7 @@ export class Game {
       })),
       this.route.checkpoints.length,
       this.gameMode,
+      this.captureSatsByPlayer,
     );
     const rankByPlayer = new Array(NUM_PLAYERS).fill(NUM_PLAYERS - 1);
     for (let place = 0; place < placementOrder.length && place < NUM_PLAYERS; place++) {
@@ -1757,7 +1792,7 @@ export class Game {
   private checkRaceEnd() {
     if (this.raceEndTimeoutId !== null) return;
     const racePlayers = this.karts.map(k => ({ finished: k.finished, eliminated: k.isEliminated() }));
-    if (shouldEndRace(racePlayers, 3, this.gameMode, this.raceTime * 1000)) {
+    if (shouldEndRace(racePlayers, 3, this.gameMode, this.raceTime * 1000, this.captureSatsRemaining)) {
       const top3 = this.pickTopPlacements(3);
       this.raceActive = false;
       const top3Names = top3.map(id => this.playerNames[id] ?? `P${id + 1}`).join(' · ');
@@ -1782,6 +1817,7 @@ export class Game {
       })),
       this.route.checkpoints.length,
       this.gameMode,
+      this.captureSatsByPlayer,
     );
     return placements.slice(0, count);
   }

@@ -11,7 +11,8 @@
     "test:smoke": "tsx src/smoke.test.ts",
     "test:ws": "tsx src/ws-lifecycle.test.ts",
     "test:payments": "tsx src/payment-contract.test.ts",
-    "test:load": "tsx src/authority-load.test.ts"
+    "test:load": "tsx src/authority-load.test.ts",
+    "test:settlement": "tsx src/settlement-contract.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.0",
