@@ -63,3 +63,11 @@ npm run test:smoke --workspace=server
 
 - Go: all sections pass, no sev1/sev2 defects, rollback verified.
 - No-Go: any critical failure in realtime sync, payments idempotency, or auth controls.
+
+## 9. Audio Verification
+
+- Complete [audio release checklist](./audio-release-checklist.md) on staging browsers/devices.
+- Confirm autoplay unlock works after first user gesture on desktop and mobile.
+- Confirm menu/lobby/race/result music transitions are correct and no loop leaks occur.
+- Confirm gameplay-critical cues (countdown, hit/use, finish, win/loss) are audible and not masked.
+- Confirm accessibility controls (master/music/SFX/UI, dynamic range, reduced sensory mode) persist across reload.

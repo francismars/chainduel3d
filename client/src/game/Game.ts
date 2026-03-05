@@ -8,6 +8,7 @@ import { InputManager } from './InputManager';
 import { ItemSystem } from './ItemSystem';
 import { HUD } from './HUD';
 import { Countdown } from './Countdown';
+import type { AudioDirector } from '../audio';
 import { GAME_CONFIG, GameMode, ItemId, OnlineRaceEvent, OnlineRaceInput, OnlineRaceSnapshot, RaceItemStats, RoomMember, RouteCustomLayout } from 'shared/types';
 import {
   createDefaultRuntimeState,
@@ -147,6 +148,7 @@ export class Game {
   private lastHeldItems: Array<ItemId | null> = new Array(NUM_PLAYERS).fill(null);
   private captureSatsByPlayer: number[] = new Array(NUM_PLAYERS).fill(0);
   private captureSatsRemaining = 0;
+  private audio: AudioDirector | null;
 
   constructor(
     container: HTMLElement,
@@ -159,6 +161,7 @@ export class Game {
     sponsorLogoUrls: string[] | undefined,
     gameMode: GameMode,
     activeSlots: boolean[] | undefined,
+    audio: AudioDirector | undefined,
     onFinished: (top3Ids: number[]) => void,
   ) {
     this.container = container;
@@ -195,6 +198,7 @@ export class Game {
     this.finishPovTarget = Array.from({ length: NUM_PLAYERS }, (_, i) => i);
     this.sponsorLogoUrls = sponsorLogoUrls ?? [];
     this.gameMode = gameMode;
+    this.audio = audio ?? null;
     this.onFinished = onFinished;
 
     this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, -20, 0) });
@@ -273,7 +277,9 @@ export class Game {
       .filter((_, idx) => idx % 4 === 0)
       .map(tp => new THREE.Vector2(tp.position.x, tp.position.z));
     this.hud = new HUD(container, playerNames, this.humanPlayerIndices, minimapPath, this.totalLaps, this.gameMode);
-    this.countdown = new Countdown(this.hud);
+    this.countdown = new Countdown(this.hud, (count: number) => {
+      this.audio?.events.onCountdownTick(count);
+    });
     if (this.online?.enabled && SHOW_ONLINE_ROOM_INTEL) {
       this.onlineRosterEl = document.createElement('div');
       this.onlineRosterEl.style.cssText = `
@@ -1183,6 +1189,7 @@ export class Game {
         if (this.gameMode === 'derby' && this.isArenaLayout) return;
         const lap = (this.karts[event.playerIndex]?.lap ?? 0) + 1;
         this.showGlobalFeedback(`P${event.playerIndex + 1} LAP ${Math.min(this.totalLaps, lap)}/${this.totalLaps}`, sourcePos);
+        this.audio?.events.onRaceEvent(event, this.getLocalPlayerIndex());
         return;
       }
       case 'finish': {
@@ -1193,6 +1200,7 @@ export class Game {
         }
         const place = this.karts.filter(k => k.finished).length;
         this.showPlacementAnnouncement(event.playerIndex, Math.max(1, place));
+        this.audio?.events.onRaceEvent(event, this.getLocalPlayerIndex());
         return;
       }
       case 'jump_start': {
@@ -1221,11 +1229,13 @@ export class Game {
         if (event.targetPlayerIndex === this.getLocalPlayerIndex()) {
           this.hud.pushEvent('YOU LOST A CHAIN BLOCK', 'danger', 3200);
         }
+        this.audio?.events.onRaceEvent(event, this.getLocalPlayerIndex());
         return;
       }
       case 'sacrifice_boost': {
         this.hud.pushEvent(`P${event.playerIndex + 1} SACRIFICE BOOST`, 'neutral');
         this.showGlobalFeedback(`P${event.playerIndex + 1} SACRIFICE BOOST`, sourcePos);
+        this.audio?.events.onRaceEvent(event, this.getLocalPlayerIndex());
         return;
       }
       case 'item_used': {
@@ -1246,6 +1256,7 @@ export class Game {
           this.hud.pushEvent(`YOU WERE HIT: ${itemLabel}`, 'danger', 3400);
           this.showGlobalFeedback(`YOU GOT HIT: ${itemLabel}`, this.karts[event.targetPlayerIndex].getPosition(), 'danger');
         }
+        this.audio?.events.onRaceEvent(event, this.getLocalPlayerIndex());
         return;
       }
       default:
@@ -1272,6 +1283,7 @@ export class Game {
     this.itemStats[playerIndex].pickups += 1;
     const label = this.getItemShortLabel(item);
     this.hud.pushEvent(`P${playerIndex + 1} PICKED ${label}`, 'neutral');
+    this.audio?.events.onItemPickup();
   }
 
   private getLocalPlayerIndex(): number {
@@ -1487,6 +1499,7 @@ export class Game {
       if (shouldBeActive) {
         this.showGlobalFeedback('FINAL LAP INTENSITY');
       }
+      this.audio?.events.onFinalLapIntensity(shouldBeActive);
     }
   }
 
@@ -1577,6 +1590,8 @@ export class Game {
       .join(' · ');
     const endTitle = this.gameMode === 'derby' ? 'DERBY OVER' : 'DUEL OVER';
     this.showRaceAnnouncement(endTitle, `Top 3: ${top3Names}`, 1900);
+    const localWinner = top3Ids[0] === this.getLocalPlayerIndex();
+    this.audio?.events.onRaceResult(localWinner);
   }
 
   private showRaceAnnouncement(title: string, subtitle?: string, durationMs = 2200) {
@@ -1798,6 +1813,8 @@ export class Game {
       const top3Names = top3.map(id => this.playerNames[id] ?? `P${id + 1}`).join(' · ');
       const endTitle = this.gameMode === 'derby' ? 'DERBY OVER' : 'DUEL OVER';
       this.showRaceAnnouncement(endTitle, `Top 3: ${top3Names}`, 1900);
+      const localWinner = top3[0] === this.getLocalPlayerIndex();
+      this.audio?.events.onRaceResult(localWinner);
       this.raceEndTimeoutId = window.setTimeout(() => {
         this.raceEndTimeoutId = null;
         this.onFinished(top3);

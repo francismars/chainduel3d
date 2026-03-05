@@ -6,11 +6,13 @@ export class Countdown {
   private count: number;
   private timer = 0;
   private started = false;
+  private onCountChanged?: (count: number) => void;
   public finished = false;
 
-  constructor(hud: HUD) {
+  constructor(hud: HUD, onCountChanged?: (count: number) => void) {
     this.hud = hud;
     this.count = GAME_CONFIG.COUNTDOWN_SECONDS;
+    this.onCountChanged = onCountChanged;
   }
 
   start() {
@@ -19,6 +21,7 @@ export class Countdown {
     this.timer = 0;
     this.finished = false;
     this.hud.showCountdown(this.count);
+    this.onCountChanged?.(this.count);
   }
 
   update(dt: number) {
@@ -31,8 +34,10 @@ export class Countdown {
 
       if (this.count > 0) {
         this.hud.showCountdown(this.count);
+        this.onCountChanged?.(this.count);
       } else if (this.count === 0) {
         this.hud.showCountdown(0);
+        this.onCountChanged?.(0);
         this.finished = true;
         this.started = false;
       }
@@ -43,6 +48,7 @@ export class Countdown {
     this.started = false;
     this.finished = false;
     this.hud.showCountdown(count);
+    this.onCountChanged?.(count);
   }
 
   hide() {

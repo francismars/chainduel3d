@@ -14,6 +14,15 @@ import { ChatMessage, GAME_CONFIG, GameMode, OnlineRaceSnapshot, RaceItemStats, 
 import { RoomClient } from './online/RoomClient';
 import { setupPWA } from './pwa';
 import { SessionApi } from './services/SessionApi';
+import {
+  AudioDirector,
+  defaultMusicLabPreset,
+  normalizeMusicLabPreset,
+  renderMusicLabLoop,
+  type DynamicRangeMode,
+  type MusicLabPreset,
+  type MusicLabTrack,
+} from './audio';
 
 setupPWA();
 
@@ -24,6 +33,7 @@ const SPONSOR_LOGO_IMPORTS = import.meta.glob('./assets/sponsors/*.{png,jpg,jpeg
 
 const SPONSOR_LOGO_URLS = Object.values(SPONSOR_LOGO_IMPORTS);
 const UI_FONT_FAMILY = "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
+const MUSIC_LAB_STORAGE_KEY = 'chainduel3d.audio.musiclab.v1';
 
 interface SponsorPreviewRow {
   sourcePath: string;
@@ -89,7 +99,7 @@ const loadSponsorPreviewRows = async (): Promise<SponsorPreviewRow[]> => {
   return rows;
 };
 
-type AppState = 'mode' | 'lobby' | 'online_entry' | 'online_room' | 'admin' | 'how_to_play' | 'payment' | 'racing' | 'result';
+type AppState = 'mode' | 'lobby' | 'online_entry' | 'online_room' | 'admin' | 'how_to_play' | 'settings' | 'payment' | 'racing' | 'result';
 type RouteOption = { id: string; name: string };
 
 class ChainDuel3DApp {
@@ -128,15 +138,35 @@ class ChainDuel3DApp {
   private loadingSubEl: HTMLDivElement | null = null;
   private loadingShownAt = 0;
   private inFlightActions = new Set<string>();
+  private audio: AudioDirector;
+  private audioDiagOverlayEl: HTMLDivElement | null = null;
+  private audioDiagOverlayEnabled = false;
+  private audioDiagRaf = 0;
+  private menuMusicPreset: MusicLabPreset = defaultMusicLabPreset('menu');
+  private raceMusicPreset: MusicLabPreset = defaultMusicLabPreset('race');
 
   constructor() {
     this.container = document.getElementById('app')!;
-    this.lobbyUI = new LobbyUI(this.container, this.showModeMenu.bind(this), this.onStartGame.bind(this));
+    this.lobbyUI = new LobbyUI(
+      this.container,
+      () => {
+        this.audio.events.onUiClick('back');
+        this.showModeMenu();
+      },
+      (...args) => {
+        this.audio.events.onUiClick('confirm');
+        return this.onStartGame(...args);
+      },
+    );
     this.onlineLobbyUI = new OnlineLobbyUI(this.container);
     this.paymentUI = new PaymentUI(this.container);
     this.resultUI = new ResultUI(this.container);
     this.roomClient = new RoomClient();
     this.sessionApi = new SessionApi();
+    this.audio = new AudioDirector();
+    this.loadMusicLabPresets();
+    this.applyMusicLabPresetToEngine('menu');
+    this.applyMusicLabPresetToEngine('race');
     this.lobbyUI.setRoutes(this.routes);
     this.onlineLobbyUI.setRoutes(this.routes);
     this.roomClient.setHandlers({
@@ -162,6 +192,8 @@ class ChainDuel3DApp {
     const url = new URL(window.location.href);
     this.onlineInviteCodeFromUrl = url.searchParams.get('room');
     void this.refreshRoutes();
+    void this.audio.init().then(() => this.audio.setAppState('menu'));
+    this.attachAudioUiDelegates();
     this.showModeMenu();
   }
 
@@ -253,6 +285,7 @@ class ChainDuel3DApp {
 
   private showModeMenu() {
     this.state = 'mode';
+    this.audio.setAppState('menu');
     this.container.innerHTML = '';
     const compactLayout = window.innerHeight < 860;
     const wrap = document.createElement('div');
@@ -314,6 +347,11 @@ class ChainDuel3DApp {
     howBtn.style.cssText = this.modeBtnCss(false);
     howBtn.onclick = () => this.showHowToPlay();
     card.appendChild(howBtn);
+    const settingsBtn = document.createElement('button');
+    settingsBtn.textContent = 'SETTINGS';
+    settingsBtn.style.cssText = this.modeBtnCss(false);
+    settingsBtn.onclick = () => this.showSettingsMenu();
+    card.appendChild(settingsBtn);
     if (this.bootLoading || this.bootLoadFailed) {
       const bootStatus = document.createElement('div');
       bootStatus.style.cssText = 'margin-top:10px;font-size:12px;color:#9f9f9f;min-height:18px;';
@@ -350,8 +388,811 @@ class ChainDuel3DApp {
     `;
   }
 
+  private showSettingsMenu() {
+    this.state = 'settings';
+    this.audio.setAppState('menu');
+    this.container.innerHTML = '';
+    const compactLayout = window.innerHeight < 860;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `
+      width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:${compactLayout ? 'flex-start' : 'center'};
+      background:radial-gradient(circle at center,#080808 0%,#000 70%);
+      color:#f0f0f0;font-family:${UI_FONT_FAMILY}; overflow:auto;
+      padding:${compactLayout ? '10px 10px 14px' : '18px 14px 22px'}; box-sizing:border-box;
+    `;
+
+    const card = document.createElement('div');
+    card.style.cssText = `
+      width:min(560px,92vw);background:#090909;border:1px solid #2b2b2b;border-radius:10px;
+      padding:${compactLayout ? '14px' : '20px'};box-shadow:0 0 24px rgba(255,255,255,0.08);
+    `;
+    const title = document.createElement('div');
+    title.textContent = 'SETTINGS';
+    title.style.cssText = 'font-size:18px;letter-spacing:2px;color:#fff;margin-bottom:8px;';
+    card.appendChild(title);
+    this.renderAudioSettingsCard(card);
+    const labBox = document.createElement('div');
+    labBox.style.cssText = 'margin-top:10px;padding:10px;border:1px solid #2d2d2d;border-radius:8px;background:#0d0d0d;';
+    const labTitle = document.createElement('div');
+    labTitle.textContent = 'MUSIC LAB';
+    labTitle.style.cssText = 'color:#fff;font-size:12px;letter-spacing:1px;margin-bottom:8px;';
+    labBox.appendChild(labTitle);
+    const labDesc = document.createElement('div');
+    labDesc.textContent = 'Build and edit your own menu/race techno loops.';
+    labDesc.style.cssText = 'font-size:11px;color:#a8a8a8;margin-bottom:8px;';
+    labBox.appendChild(labDesc);
+    const menuBtn = document.createElement('button');
+    menuBtn.textContent = 'EDIT MENU MUSIC';
+    menuBtn.style.cssText = this.modeBtnCss(false);
+    menuBtn.onclick = () => this.openMusicBuilder('menu');
+    labBox.appendChild(menuBtn);
+    const raceBtn = document.createElement('button');
+    raceBtn.textContent = 'EDIT RACE MUSIC';
+    raceBtn.style.cssText = this.modeBtnCss(false);
+    raceBtn.onclick = () => this.openMusicBuilder('race');
+    labBox.appendChild(raceBtn);
+    card.appendChild(labBox);
+
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'BACK';
+    backBtn.style.cssText = this.backBtnCss();
+    backBtn.onclick = () => this.showModeMenu();
+    card.appendChild(backBtn);
+
+    wrap.appendChild(card);
+    this.decorateInteractiveElements(card);
+    this.container.appendChild(wrap);
+  }
+
+  private attachAudioUiDelegates() {
+    window.addEventListener('keydown', event => {
+      if (event.key !== 'F8') return;
+      event.preventDefault();
+      this.audioDiagOverlayEnabled = !this.audioDiagOverlayEnabled;
+      if (this.audioDiagOverlayEnabled) {
+        this.ensureAudioDiagnosticsOverlay();
+      } else {
+        this.disableAudioDiagnosticsOverlay();
+      }
+    });
+    this.container.addEventListener('pointerover', event => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('button,[role="button"],summary')) {
+        this.audio.events.onUiHover();
+      }
+    });
+    this.container.addEventListener('click', event => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const button = target.closest('button,[role="button"],summary') as HTMLElement | null;
+      if (!button) return;
+      const text = (button.textContent ?? '').toLowerCase();
+      if (text.includes('back') || text.includes('leave')) {
+        this.audio.events.onUiClick('back');
+        return;
+      }
+      if (
+        text.includes('start')
+        || text.includes('join')
+        || text.includes('create')
+        || text.includes('save')
+        || text.includes('apply')
+        || text.includes('publish')
+        || text.includes('continue')
+      ) {
+        this.audio.events.onUiClick('confirm');
+        return;
+      }
+      this.audio.events.onUiClick('default');
+    });
+  }
+
+  private ensureAudioDiagnosticsOverlay() {
+    if (!this.audioDiagOverlayEl) {
+      const panel = document.createElement('div');
+      panel.style.cssText = `
+        position:fixed;right:10px;top:10px;z-index:9999;pointer-events:none;
+        font:11px 'Courier New', monospace;color:#dcdcdc;background:rgba(0,0,0,0.78);
+        border:1px solid #333;padding:6px 8px;border-radius:6px;min-width:220px;
+      `;
+      document.body.appendChild(panel);
+      this.audioDiagOverlayEl = panel;
+    }
+    if (this.audioDiagRaf) cancelAnimationFrame(this.audioDiagRaf);
+    const tick = () => {
+      if (!this.audioDiagOverlayEnabled || !this.audioDiagOverlayEl) return;
+      const d = this.audio.getDiagnostics();
+      this.audioDiagOverlayEl.textContent =
+        `audio ${d.unlocked ? 'ready' : 'locked'} | voices ${d.activeVoices} | dropped ${d.droppedByVoiceLimit}/${d.droppedByCueLimit} | decodeErr ${d.failedDecodes}`;
+      this.audioDiagRaf = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  private disableAudioDiagnosticsOverlay() {
+    if (this.audioDiagRaf) {
+      cancelAnimationFrame(this.audioDiagRaf);
+      this.audioDiagRaf = 0;
+    }
+    this.audioDiagOverlayEl?.remove();
+    this.audioDiagOverlayEl = null;
+  }
+
+  private renderAudioSettingsCard(parent: HTMLElement) {
+    const settings = this.audio.getSettings();
+    const box = document.createElement('div');
+    box.style.cssText = 'margin-top:10px;padding:10px;border:1px solid #2d2d2d;border-radius:8px;background:#0d0d0d;';
+    const title = document.createElement('div');
+    title.textContent = 'AUDIO';
+    title.style.cssText = 'color:#fff;font-size:12px;letter-spacing:1px;margin-bottom:8px;';
+    box.appendChild(title);
+    const makeSlider = (label: string, key: 'masterVolume' | 'musicVolume' | 'sfxGameplayVolume' | 'sfxUiVolume') => {
+      const row = document.createElement('label');
+      row.style.cssText = 'display:grid;grid-template-columns:98px 1fr 34px;gap:8px;align-items:center;margin-top:6px;font-size:11px;color:#a9a9a9;';
+      const name = document.createElement('span');
+      name.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = '0';
+      input.max = '100';
+      input.value = String(Math.round(settings[key] * 100));
+      input.style.cssText = 'accent-color:#dfdfdf;';
+      const out = document.createElement('span');
+      out.textContent = `${input.value}%`;
+      input.oninput = () => {
+        out.textContent = `${input.value}%`;
+        this.audio.updateSettings({ [key]: Number(input.value) / 100 });
+      };
+      row.appendChild(name);
+      row.appendChild(input);
+      row.appendChild(out);
+      return row;
+    };
+    box.appendChild(makeSlider('MASTER', 'masterVolume'));
+    box.appendChild(makeSlider('MUSIC', 'musicVolume'));
+    box.appendChild(makeSlider('GAME SFX', 'sfxGameplayVolume'));
+    box.appendChild(makeSlider('UI SFX', 'sfxUiVolume'));
+
+    const toggles = document.createElement('div');
+    toggles.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;';
+    const makeCheck = (label: string, checked: boolean, onToggle: (next: boolean) => void) => {
+      const wrap = document.createElement('label');
+      wrap.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:#c4c4c4;';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = checked;
+      input.style.cssText = 'accent-color:#e0e0e0;';
+      input.onchange = () => onToggle(input.checked);
+      wrap.appendChild(input);
+      wrap.appendChild(document.createTextNode(label));
+      return wrap;
+    };
+    toggles.appendChild(makeCheck('MUTE', settings.masterMuted, next => this.audio.updateSettings({ masterMuted: next })));
+    toggles.appendChild(makeCheck('REDUCED SENSORY', settings.reducedSensoryMode, next => {
+      this.audio.updateSettings({
+        reducedSensoryMode: next,
+        sfxGameplayVolume: next ? Math.min(0.75, this.audio.getSettings().sfxGameplayVolume) : this.audio.getSettings().sfxGameplayVolume,
+      });
+    }));
+    box.appendChild(toggles);
+
+    const rangeRow = document.createElement('div');
+    rangeRow.style.cssText = 'display:grid;grid-template-columns:98px 1fr;gap:8px;align-items:center;margin-top:8px;font-size:11px;color:#a9a9a9;';
+    const rangeLabel = document.createElement('span');
+    rangeLabel.textContent = 'DYNAMICS';
+    const rangeSelect = document.createElement('select');
+    rangeSelect.style.cssText = 'background:#101010;border:1px solid #2f2f2f;border-radius:4px;color:#ddd;padding:4px;';
+    rangeSelect.innerHTML = `
+      <option value="full">FULL</option>
+      <option value="medium">MEDIUM</option>
+      <option value="low">LOW</option>
+    `;
+    rangeSelect.value = settings.dynamicRangeMode;
+    rangeSelect.onchange = () => this.audio.updateSettings({ dynamicRangeMode: rangeSelect.value as DynamicRangeMode });
+    rangeRow.appendChild(rangeLabel);
+    rangeRow.appendChild(rangeSelect);
+    box.appendChild(rangeRow);
+
+    const diagRow = document.createElement('div');
+    diagRow.style.cssText = 'margin-top:8px;font-size:10px;color:#7e7e7e;';
+    const updateDiag = () => {
+      if (!diagRow.isConnected) return;
+      const diag = this.audio.getDiagnostics();
+      diagRow.textContent =
+        `audio: ${diag.unlocked ? 'ready' : 'locked'} | voices ${diag.activeVoices} | dropped ${diag.droppedByVoiceLimit}/${diag.droppedByCueLimit} | buffers ${diag.decodedBufferCount}`;
+      setTimeout(updateDiag, 750);
+    };
+    updateDiag();
+    box.appendChild(diagRow);
+
+    const quickFixRow = document.createElement('div');
+    quickFixRow.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;';
+    const flattenMenuLeadBtn = document.createElement('button');
+    flattenMenuLeadBtn.textContent = 'REMOVE MENU SCALE MELODY';
+    flattenMenuLeadBtn.style.cssText = 'padding:6px 10px;border:1px solid #3a3a3a;border-radius:4px;background:#121212;color:#e3e3e3;font-size:10px;cursor:pointer;letter-spacing:0.4px;';
+    flattenMenuLeadBtn.onclick = () => {
+      this.menuMusicPreset = {
+        ...this.menuMusicPreset,
+        lead: 0,
+        brightness: Math.min(this.menuMusicPreset.brightness, 0.45),
+        leadPattern: new Array(16).fill(-1),
+      };
+      this.applyMusicLabPresetToEngine('menu');
+      this.saveMusicLabPresets();
+      this.audio.setAppState('menu');
+      flattenMenuLeadBtn.textContent = 'MENU MELODY REMOVED';
+      setTimeout(() => {
+        if (flattenMenuLeadBtn.isConnected) flattenMenuLeadBtn.textContent = 'REMOVE MENU SCALE MELODY';
+      }, 1400);
+    };
+    quickFixRow.appendChild(flattenMenuLeadBtn);
+
+    const chimeToggle = document.createElement('label');
+    chimeToggle.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid #3a3a3a;border-radius:4px;background:#121212;color:#e3e3e3;font-size:10px;letter-spacing:0.3px;';
+    const chimeInput = document.createElement('input');
+    chimeInput.type = 'checkbox';
+    chimeInput.style.cssText = 'accent-color:#efefef;';
+    const uiChimeCues = ['ui_hover', 'ui_click', 'ui_back', 'ui_confirm'];
+    chimeInput.checked = uiChimeCues.every(cue => this.audio.isCueDisabled(cue));
+    chimeInput.onchange = () => {
+      for (const cueId of uiChimeCues) this.audio.setCueDisabled(cueId, chimeInput.checked);
+    };
+    chimeToggle.appendChild(chimeInput);
+    chimeToggle.appendChild(document.createTextNode('MUTE MENU CHIMES'));
+    quickFixRow.appendChild(chimeToggle);
+    box.appendChild(quickFixRow);
+
+    const cueSection = document.createElement('details');
+    cueSection.style.cssText = 'margin-top:10px;border:1px solid #282828;border-radius:6px;background:#0a0a0a;';
+    const cueSummary = document.createElement('summary');
+    cueSummary.textContent = 'SOUND LIBRARY (mute sounds you hate)';
+    cueSummary.style.cssText = 'cursor:pointer;padding:8px 10px;font-size:11px;color:#d7d7d7;letter-spacing:0.5px;';
+    cueSection.appendChild(cueSummary);
+    const cueBody = document.createElement('div');
+    cueBody.style.cssText = 'padding:8px 10px;display:grid;gap:6px;';
+    const cues = this.audio.getCues();
+    for (const cue of cues) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;font-size:11px;color:#c2c2c2;';
+      const label = document.createElement('span');
+      label.textContent = `${cue.id} (${cue.category})`;
+      const previewBtn = document.createElement('button');
+      previewBtn.textContent = 'TEST';
+      previewBtn.style.cssText = 'padding:4px 7px;border:1px solid #353535;border-radius:4px;background:#121212;color:#d7d7d7;font-size:10px;cursor:pointer;';
+      previewBtn.onclick = () => {
+        if (cue.loop) {
+          void this.audio.engine.playLoop(cue.id);
+          setTimeout(() => this.audio.engine.stopCue(cue.id), 1800);
+        } else {
+          void this.audio.engine.playCue(cue.id);
+        }
+      };
+      const mute = document.createElement('label');
+      mute.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:10px;color:#d0d0d0;';
+      const muteInput = document.createElement('input');
+      muteInput.type = 'checkbox';
+      muteInput.checked = this.audio.isCueDisabled(cue.id);
+      muteInput.style.cssText = 'accent-color:#efefef;';
+      muteInput.onchange = () => {
+        this.audio.setCueDisabled(cue.id, muteInput.checked);
+      };
+      mute.appendChild(muteInput);
+      mute.appendChild(document.createTextNode('MUTE'));
+      row.appendChild(label);
+      row.appendChild(previewBtn);
+      row.appendChild(mute);
+      cueBody.appendChild(row);
+    }
+    cueSection.appendChild(cueBody);
+    box.appendChild(cueSection);
+
+    parent.appendChild(box);
+  }
+
+  private loadMusicLabPresets() {
+    try {
+      const raw = window.localStorage.getItem(MUSIC_LAB_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<Record<MusicLabTrack, Partial<MusicLabPreset>>>;
+      if (parsed.menu) this.menuMusicPreset = normalizeMusicLabPreset(parsed.menu, 'menu');
+      if (parsed.race) this.raceMusicPreset = normalizeMusicLabPreset(parsed.race, 'race');
+    } catch {
+      // Keep defaults if preset parsing fails.
+    }
+  }
+
+  private saveMusicLabPresets() {
+    try {
+      window.localStorage.setItem(MUSIC_LAB_STORAGE_KEY, JSON.stringify({
+        menu: this.menuMusicPreset,
+        race: this.raceMusicPreset,
+      }));
+    } catch {
+      // Ignore storage quota/permission errors.
+    }
+  }
+
+  private applyMusicLabPresetToEngine(track: MusicLabTrack) {
+    const preset = track === 'menu' ? this.menuMusicPreset : this.raceMusicPreset;
+    const samples = renderMusicLabLoop(44100, 8, track, preset);
+    const cueId = track === 'menu' ? 'music_menu_loop' : 'music_race_loop';
+    this.audio.engine.setCustomLoopBuffer(cueId, samples, 44100);
+  }
+
+  private drawMusicLabWaveform(canvas: HTMLCanvasElement, track: MusicLabTrack, preset: MusicLabPreset) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#090909';
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = '#252525';
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+    const samples = renderMusicLabLoop(1200, 2, track, preset);
+    ctx.strokeStyle = '#efefef';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const idx = Math.floor((x / (w - 1)) * (samples.length - 1));
+      const y = h * 0.5 - samples[idx] * (h * 0.36);
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  private openMusicBuilder(track: MusicLabTrack) {
+    const base = track === 'menu' ? this.menuMusicPreset : this.raceMusicPreset;
+    const draft: MusicLabPreset = { ...base };
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position:absolute; inset:0; z-index:260; display:flex; align-items:center; justify-content:center;
+      background:rgba(0,0,0,0.78); font-family:${UI_FONT_FAMILY};
+    `;
+    const card = document.createElement('div');
+    const closeBuilder = () => {
+      modal.remove();
+      // Music Lab lives inside settings/menu flow, so always restore menu-state
+      // routing after preview/apply interactions to avoid stuck/incorrect loops.
+      this.audio.setAppState('menu');
+    };
+
+    card.style.cssText = `
+      width:min(720px,96vw); max-height:92vh; overflow:auto;
+      background:#0a0a0a;border:1px solid #2e2e2e;border-radius:10px;padding:14px;
+      color:#efefef; box-shadow:0 0 24px rgba(255,255,255,0.08);
+    `;
+    const title = document.createElement('div');
+    title.textContent = track === 'menu' ? 'MUSIC LAB - MENU LOOP' : 'MUSIC LAB - RACE LOOP';
+    title.style.cssText = 'font-size:14px;letter-spacing:1px;color:#fff;margin-bottom:8px;';
+    card.appendChild(title);
+    const wave = document.createElement('canvas');
+    wave.width = 640;
+    wave.height = 180;
+    wave.style.cssText = 'width:100%;height:180px;border:1px solid #2d2d2d;border-radius:8px;background:#090909;';
+    card.appendChild(wave);
+    this.drawMusicLabWaveform(wave, track, draft);
+
+    const controls = document.createElement('div');
+    controls.style.cssText = 'margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;';
+    type NumericKey =
+      | 'bpm'
+      | 'energy'
+      | 'brightness'
+      | 'bass'
+      | 'lead'
+      | 'swing'
+      | 'kickLevel'
+      | 'kickPitchStart'
+      | 'kickPitchEnd'
+      | 'kickDecay'
+      | 'bassLevel'
+      | 'leadLevel'
+      | 'hatLevel'
+      | 'leadAir'
+      | 'rootMidi';
+    const defs: Array<{ key: NumericKey; label: string; min: number; max: number; step: number }> = [
+      { key: 'bpm', label: 'BPM', min: 90, max: 170, step: 1 },
+      { key: 'energy', label: 'ENERGY', min: 0, max: 1, step: 0.01 },
+      { key: 'brightness', label: 'BRIGHTNESS', min: 0, max: 1, step: 0.01 },
+      { key: 'bass', label: 'BASS', min: 0, max: 1, step: 0.01 },
+      { key: 'lead', label: 'LEAD', min: 0, max: 1, step: 0.01 },
+      { key: 'swing', label: 'SWING', min: 0, max: 1, step: 0.01 },
+      { key: 'kickPitchStart', label: 'KICK TONE', min: 0, max: 1, step: 0.01 },
+      { key: 'kickPitchEnd', label: 'KICK BODY', min: 0, max: 1, step: 0.01 },
+      { key: 'kickDecay', label: 'KICK DECAY', min: 0, max: 1, step: 0.01 },
+      { key: 'rootMidi', label: 'ROOT MIDI', min: 36, max: 72, step: 1 },
+    ];
+    for (const d of defs) {
+      const row = document.createElement('label');
+      row.style.cssText = 'display:grid;grid-template-columns:90px 1fr 48px;gap:8px;align-items:center;font-size:11px;color:#bcbcbc;';
+      const name = document.createElement('span');
+      name.textContent = d.label;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(d.min);
+      input.max = String(d.max);
+      input.step = String(d.step);
+      input.value = String(draft[d.key]);
+      input.style.cssText = 'accent-color:#efefef;';
+      const out = document.createElement('span');
+      out.textContent = d.key === 'bpm' ? String(draft[d.key]) : Number(draft[d.key]).toFixed(2);
+      input.oninput = () => {
+        draft[d.key] = d.key === 'bpm' ? Number(input.value) : Number(input.value);
+        out.textContent = d.key === 'bpm' ? String(Math.round(draft[d.key])) : Number(draft[d.key]).toFixed(2);
+        this.drawMusicLabWaveform(wave, track, draft);
+      };
+      row.appendChild(name);
+      row.appendChild(input);
+      row.appendChild(out);
+      controls.appendChild(row);
+    }
+    card.appendChild(controls);
+
+    const kickDesigner = document.createElement('div');
+    kickDesigner.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid #252525;';
+    const kickTitle = document.createElement('div');
+    kickTitle.textContent = 'KICK DESIGNER (drag dot)';
+    kickTitle.style.cssText = 'font-size:11px;color:#dfdfdf;letter-spacing:0.8px;margin-bottom:6px;';
+    kickDesigner.appendChild(kickTitle);
+    const kickHint = document.createElement('div');
+    kickHint.textContent = 'X = tone start, Y = body depth. Kick decay uses slider above.';
+    kickHint.style.cssText = 'font-size:10px;color:#8d8d8d;margin-bottom:6px;';
+    kickDesigner.appendChild(kickHint);
+    const kickPad = document.createElement('canvas');
+    kickPad.width = 300;
+    kickPad.height = 110;
+    kickPad.style.cssText = 'width:100%;height:110px;border:1px solid #2f2f2f;border-radius:8px;background:#0e0e0e;cursor:crosshair;';
+    const drawKickPad = () => {
+      const ctx = kickPad.getContext('2d');
+      if (!ctx) return;
+      const w = kickPad.width;
+      const h = kickPad.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#0c0c0c';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = '#1f1f1f';
+      for (let i = 1; i < 6; i++) {
+        const x = (w / 6) * i;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let i = 1; i < 4; i++) {
+        const y = (h / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      const px = draft.kickPitchStart * w;
+      const py = (1 - draft.kickPitchEnd) * h;
+      ctx.fillStyle = '#f0f0f0';
+      ctx.beginPath();
+      ctx.arc(px, py, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.stroke();
+    };
+    const updateKickPadFromPointer = (clientX: number, clientY: number) => {
+      const rect = kickPad.getBoundingClientRect();
+      const nx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const ny = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+      draft.kickPitchStart = nx;
+      draft.kickPitchEnd = 1 - ny;
+      drawKickPad();
+      this.drawMusicLabWaveform(wave, track, draft);
+    };
+    kickPad.addEventListener('pointerdown', event => {
+      event.preventDefault();
+      kickPad.setPointerCapture(event.pointerId);
+      updateKickPadFromPointer(event.clientX, event.clientY);
+    });
+    kickPad.addEventListener('pointermove', event => {
+      if ((event.buttons & 1) === 0) return;
+      updateKickPadFromPointer(event.clientX, event.clientY);
+    });
+    drawKickPad();
+    kickDesigner.appendChild(kickPad);
+    card.appendChild(kickDesigner);
+
+    const mixer = document.createElement('div');
+    mixer.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid #252525;';
+    const mixerTitle = document.createElement('div');
+    mixerTitle.textContent = 'GRAPHICAL MIXER (drag up/down)';
+    mixerTitle.style.cssText = 'font-size:11px;color:#dfdfdf;letter-spacing:0.8px;margin-bottom:8px;';
+    mixer.appendChild(mixerTitle);
+    const mixerGrid = document.createElement('div');
+    mixerGrid.style.cssText = 'display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:end;';
+    const syncMixerFromDraft = () => {
+      const strips = mixerGrid.querySelectorAll<HTMLDivElement>('[data-mixer-key]');
+      for (const stripWrap of strips) {
+        const key = stripWrap.dataset.mixerKey as 'kickLevel' | 'bassLevel' | 'leadLevel' | 'hatLevel' | 'leadAir';
+        const fill = stripWrap.querySelector<HTMLDivElement>('[data-role="fill"]');
+        const valueText = stripWrap.querySelector<HTMLDivElement>('[data-role="value"]');
+        if (!fill || !valueText) continue;
+        const value = draft[key];
+        fill.style.height = `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+        valueText.textContent = `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+      }
+    };
+    const createMixerStrip = (label: string, key: 'kickLevel' | 'bassLevel' | 'leadLevel' | 'hatLevel' | 'leadAir') => {
+      const stripWrap = document.createElement('div');
+      stripWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:5px;';
+      stripWrap.dataset.mixerKey = key;
+      const strip = document.createElement('div');
+      strip.style.cssText = 'position:relative;width:34px;height:132px;border:1px solid #303030;border-radius:8px;background:#101010;cursor:ns-resize;';
+      const fill = document.createElement('div');
+      fill.style.cssText = 'position:absolute;left:0;right:0;bottom:0;border-radius:7px;background:linear-gradient(180deg,#e2e2e2,#8f8f8f);';
+      fill.dataset.role = 'fill';
+      const valueText = document.createElement('div');
+      valueText.style.cssText = 'font-size:10px;color:#a9a9a9;';
+      valueText.dataset.role = 'value';
+      const cap = document.createElement('div');
+      cap.textContent = label;
+      cap.style.cssText = 'font-size:10px;color:#d2d2d2;letter-spacing:0.5px;';
+      const applyLevel = (level: number) => {
+        const clamped = Math.max(0, Math.min(1, level));
+        draft[key] = clamped;
+        fill.style.height = `${Math.round(clamped * 100)}%`;
+        valueText.textContent = `${Math.round(clamped * 100)}%`;
+      };
+      applyLevel(draft[key]);
+      const updateFromPointer = (clientY: number) => {
+        const rect = strip.getBoundingClientRect();
+        const ratio = 1 - (clientY - rect.top) / rect.height;
+        applyLevel(ratio);
+        this.drawMusicLabWaveform(wave, track, draft);
+      };
+      strip.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        strip.setPointerCapture(event.pointerId);
+        updateFromPointer(event.clientY);
+      });
+      strip.addEventListener('pointermove', event => {
+        if ((event.buttons & 1) === 0) return;
+        updateFromPointer(event.clientY);
+      });
+      fill.style.pointerEvents = 'none';
+      strip.appendChild(fill);
+      stripWrap.appendChild(strip);
+      stripWrap.appendChild(valueText);
+      stripWrap.appendChild(cap);
+      return stripWrap;
+    };
+    mixerGrid.appendChild(createMixerStrip('KICK', 'kickLevel'));
+    mixerGrid.appendChild(createMixerStrip('BASS', 'bassLevel'));
+    mixerGrid.appendChild(createMixerStrip('LEAD', 'leadLevel'));
+    mixerGrid.appendChild(createMixerStrip('HAT', 'hatLevel'));
+    mixerGrid.appendChild(createMixerStrip('AIR', 'leadAir'));
+    mixer.appendChild(mixerGrid);
+    card.appendChild(mixer);
+
+    const advanced = document.createElement('div');
+    advanced.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid #252525;';
+    const advTitle = document.createElement('div');
+    advTitle.textContent = 'ADVANCED SYNTH/SEQUENCER';
+    advTitle.style.cssText = 'font-size:11px;color:#dfdfdf;letter-spacing:0.8px;margin-bottom:8px;';
+    advanced.appendChild(advTitle);
+
+    const selectRow = document.createElement('div');
+    selectRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;';
+    const mkSelect = (
+      label: string,
+      options: Array<{ value: string; label: string }>,
+      value: string,
+      onChange: (value: string) => void,
+    ) => {
+      const wrap = document.createElement('label');
+      wrap.style.cssText = 'display:grid;grid-template-columns:1fr;gap:4px;font-size:10px;color:#b0b0b0;';
+      const cap = document.createElement('span');
+      cap.textContent = label;
+      const sel = document.createElement('select');
+      sel.style.cssText = 'background:#101010;border:1px solid #2f2f2f;border-radius:4px;color:#ddd;padding:5px;';
+      for (const opt of options) {
+        const el = document.createElement('option');
+        el.value = opt.value;
+        el.textContent = opt.label;
+        if (opt.value === value) el.selected = true;
+        sel.appendChild(el);
+      }
+      sel.onchange = () => {
+        onChange(sel.value);
+        this.drawMusicLabWaveform(wave, track, draft);
+      };
+      wrap.appendChild(cap);
+      wrap.appendChild(sel);
+      return wrap;
+    };
+    selectRow.appendChild(mkSelect(
+      'SCALE',
+      [
+        { value: 'minor', label: 'MINOR' },
+        { value: 'major', label: 'MAJOR' },
+        { value: 'dorian', label: 'DORIAN' },
+        { value: 'phrygian', label: 'PHRYGIAN' },
+      ],
+      draft.scale,
+      value => { draft.scale = value as MusicLabPreset['scale']; },
+    ));
+    selectRow.appendChild(mkSelect(
+      'BASS WAVE',
+      [
+        { value: 'sawtooth', label: 'SAW' },
+        { value: 'triangle', label: 'TRI' },
+        { value: 'square', label: 'SQR' },
+        { value: 'sine', label: 'SIN' },
+      ],
+      draft.bassWave,
+      value => { draft.bassWave = value as MusicLabPreset['bassWave']; },
+    ));
+    selectRow.appendChild(mkSelect(
+      'LEAD WAVE',
+      [
+        { value: 'sawtooth', label: 'SAW' },
+        { value: 'triangle', label: 'TRI' },
+        { value: 'square', label: 'SQR' },
+        { value: 'sine', label: 'SIN' },
+      ],
+      draft.leadWave,
+      value => { draft.leadWave = value as MusicLabPreset['leadWave']; },
+    ));
+    advanced.appendChild(selectRow);
+
+    const noteOptions = [
+      { value: '-1', label: 'OFF' },
+      { value: '0', label: 'R' },
+      { value: '1', label: '2' },
+      { value: '2', label: 'b3' },
+      { value: '3', label: '4' },
+      { value: '4', label: '5' },
+      { value: '5', label: 'b6' },
+      { value: '6', label: 'b7' },
+      { value: '7', label: '8' },
+      { value: '8', label: '9' },
+    ];
+    const noteLabel = (value: number) => noteOptions.find(x => Number(x.value) === value)?.label ?? 'OFF';
+    const buildPatternGrid = (titleText: string, key: 'bassPattern' | 'leadPattern') => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'margin-top:10px;';
+      const label = document.createElement('div');
+      label.textContent = titleText;
+      label.style.cssText = 'font-size:10px;color:#afafaf;margin-bottom:4px;';
+      wrap.appendChild(label);
+      const hint = document.createElement('div');
+      hint.textContent = 'Drag a note from palette and drop on a step';
+      hint.style.cssText = 'font-size:10px;color:#7f7f7f;margin-bottom:5px;';
+      wrap.appendChild(hint);
+      const palette = document.createElement('div');
+      palette.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;';
+      for (const opt of noteOptions) {
+        const chip = document.createElement('div');
+        chip.textContent = opt.label;
+        chip.draggable = true;
+        chip.style.cssText = 'padding:3px 6px;border:1px solid #333;border-radius:4px;background:#141414;color:#d8d8d8;font-size:10px;cursor:grab;';
+        chip.addEventListener('dragstart', event => {
+          event.dataTransfer?.setData('text/plain', opt.value);
+        });
+        palette.appendChild(chip);
+      }
+      wrap.appendChild(palette);
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px;';
+      for (let i = 0; i < 16; i++) {
+        const cell = document.createElement('div');
+        cell.style.cssText = `
+          background:${i % 4 === 0 ? '#1a1a1a' : '#101010'};
+          border:1px solid #2f2f2f;border-radius:4px;color:#ddd;padding:8px 4px;font-size:10px;
+          text-align:center;user-select:none;
+        `;
+        cell.textContent = `${i + 1}:${noteLabel(draft[key][i])}`;
+        cell.addEventListener('dragover', event => {
+          event.preventDefault();
+          cell.style.borderColor = '#efefef';
+        });
+        cell.addEventListener('dragleave', () => {
+          cell.style.borderColor = '#2f2f2f';
+        });
+        cell.addEventListener('drop', event => {
+          event.preventDefault();
+          cell.style.borderColor = '#2f2f2f';
+          const dropped = Number(event.dataTransfer?.getData('text/plain') ?? '-1');
+          draft[key][i] = Number.isFinite(dropped) ? dropped : -1;
+          cell.textContent = `${i + 1}:${noteLabel(draft[key][i])}`;
+          this.drawMusicLabWaveform(wave, track, draft);
+        });
+        cell.addEventListener('click', () => {
+          const current = draft[key][i];
+          const idx = noteOptions.findIndex(opt => Number(opt.value) === current);
+          const next = noteOptions[(idx + 1 + noteOptions.length) % noteOptions.length];
+          draft[key][i] = Number(next.value);
+          cell.textContent = `${i + 1}:${next.label}`;
+          this.drawMusicLabWaveform(wave, track, draft);
+        });
+        grid.appendChild(cell);
+      }
+      wrap.appendChild(grid);
+      return wrap;
+    };
+    advanced.appendChild(buildPatternGrid('BASS STEP PATTERN (16) - DRAG & DROP', 'bassPattern'));
+    advanced.appendChild(buildPatternGrid('LEAD STEP PATTERN (16) - DRAG & DROP', 'leadPattern'));
+    card.appendChild(advanced);
+
+    const buttonRow = document.createElement('div');
+    buttonRow.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;';
+    const mkBtn = (label: string, onClick: () => void, primary = false) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = primary ? this.modeBtnCss(true) : this.modeBtnCss(false);
+      b.onclick = onClick;
+      return b;
+    };
+    buttonRow.appendChild(mkBtn('PREVIEW', () => {
+      if (track === 'menu') {
+        this.audio.engine.stopCue('music_race_loop');
+        this.audio.engine.setCustomLoopBuffer('music_menu_loop', renderMusicLabLoop(44100, 8, track, draft), 44100);
+        this.audio.setAppState('menu');
+      } else {
+        this.audio.engine.stopCue('music_menu_loop');
+        this.audio.engine.setCustomLoopBuffer('music_race_loop', renderMusicLabLoop(44100, 8, track, draft), 44100);
+        void this.audio.engine.playLoop('music_race_loop');
+      }
+    }, true));
+    buttonRow.appendChild(mkBtn('APPLY', () => {
+      const normalized = normalizeMusicLabPreset(draft, track);
+      if (track === 'menu') this.menuMusicPreset = normalized;
+      else this.raceMusicPreset = normalized;
+      this.applyMusicLabPresetToEngine(track);
+      this.saveMusicLabPresets();
+    }, true));
+    buttonRow.appendChild(mkBtn('RESET', () => {
+      const reset = defaultMusicLabPreset(track);
+      Object.assign(draft, JSON.parse(JSON.stringify(reset)));
+      this.drawMusicLabWaveform(wave, track, draft);
+      for (const input of controls.querySelectorAll<HTMLInputElement>('input[type="range"]')) {
+        const key = defs.find(x => x.label === (input.parentElement?.firstChild as HTMLElement)?.textContent)?.key;
+        if (!key) continue;
+        input.value = String(draft[key]);
+        const valueEl = input.parentElement?.querySelector('span:last-child');
+        if (valueEl) valueEl.textContent = key === 'bpm' ? String(Math.round(draft[key])) : Number(draft[key]).toFixed(2);
+      }
+      for (const select of advanced.querySelectorAll<HTMLSelectElement>('select')) {
+        const label = select.parentElement?.firstChild?.textContent ?? '';
+        if (label === 'SCALE') select.value = draft.scale;
+        if (label === 'BASS WAVE') select.value = draft.bassWave;
+        if (label === 'LEAD WAVE') select.value = draft.leadWave;
+      }
+      for (const row of advanced.querySelectorAll<HTMLDivElement>('div[style*="grid-template-columns:repeat(8"] > div')) {
+        const txt = row.textContent ?? '';
+        const idx = Number((txt.split(':')[0] ?? '1')) - 1;
+        const isBass = row.parentElement?.previousElementSibling?.textContent?.includes('BASS') ?? false;
+        const source = isBass ? draft.bassPattern : draft.leadPattern;
+        const note = source[Math.max(0, Math.min(15, idx))];
+        row.textContent = `${idx + 1}:${noteLabel(note)}`;
+      }
+      syncMixerFromDraft();
+      drawKickPad();
+    }));
+    buttonRow.appendChild(mkBtn('CLOSE', () => closeBuilder()));
+    card.appendChild(buttonRow);
+
+    modal.addEventListener('click', event => {
+      if (event.target === modal) closeBuilder();
+    });
+    modal.appendChild(card);
+    this.container.appendChild(modal);
+    this.decorateInteractiveElements(card);
+  }
+
   private showHowToPlay() {
     this.state = 'how_to_play';
+    this.audio.setAppState('menu');
     this.container.innerHTML = '';
     const compactLayout = window.innerHeight < 860;
     const wrap = document.createElement('div');
@@ -422,15 +1263,18 @@ class ChainDuel3DApp {
 
   private showLobby() {
     this.state = 'lobby';
+    this.audio.setAppState('lobby');
     this.container.innerHTML = '';
     this.lobbyUI.show();
   }
 
   private showOnlineEntry(prefillCode = '') {
     this.state = 'online_entry';
+    this.audio.setAppState('lobby');
     this.onlineLobbyUI.showEntry({
       onBackToMode: () => this.showModeMenu(),
       onCreate: async (name) => {
+        this.audio.events.onUiClick('confirm');
         try {
           this.selectedRouteId = 'default';
           this.gameMode = 'classic';
@@ -458,6 +1302,7 @@ class ChainDuel3DApp {
         }
       },
       onJoin: async (code, name) => {
+        this.audio.events.onUiClick('confirm');
         const joinCode = code || prefillCode;
         if (!joinCode) {
           this.onlineLobbyUI.setStatus('Enter a room code');
@@ -485,10 +1330,12 @@ class ChainDuel3DApp {
 
   private showOnlineRoom(room: RoomState) {
     this.state = 'online_room';
+    this.audio.setAppState('lobby');
     this.onlineRoom = room;
     if (!this.onlineMemberId) return;
     this.onlineLobbyUI.showRoom(room, this.onlineMemberId, {
       onBack: () => {
+        this.audio.events.onUiClick('back');
         this.roomClient.leave();
         this.roomClient.disconnect();
         this.onlineRoom = null;
@@ -497,6 +1344,7 @@ class ChainDuel3DApp {
         this.showModeMenu();
       },
       onPatchSettings: async s => {
+        this.audio.events.onUiClick('confirm');
         await this.runWithLoading(
           'online:patch-settings',
           'Saving settings...',
@@ -505,6 +1353,7 @@ class ChainDuel3DApp {
         );
       },
       onStart: async () => {
+        this.audio.events.onUiClick('confirm');
         await this.runWithLoading(
           'online:start-race',
           'Starting race...',
@@ -514,6 +1363,7 @@ class ChainDuel3DApp {
       },
       onSendChat: txt => this.roomClient.sendChat(txt),
       onKick: async memberId => {
+        this.audio.events.onUiClick('confirm');
         await this.runWithLoading(
           `online:kick:${memberId}`,
           'Removing player...',
@@ -522,6 +1372,7 @@ class ChainDuel3DApp {
         );
       },
       onSetReady: async ready => {
+        this.audio.events.onUiClick('confirm');
         await this.runWithLoading(
           'online:set-ready',
           ready ? 'Marking ready...' : 'Marking unready...',
@@ -530,6 +1381,7 @@ class ChainDuel3DApp {
         );
       },
       onSetName: async name => {
+        this.audio.events.onUiClick('confirm');
         await this.runWithLoading(
           'online:set-name',
           'Updating name...',
@@ -599,6 +1451,7 @@ class ChainDuel3DApp {
         const routeLayout = await this.resolveRouteLayout(this.selectedRouteId);
         this.updateGlobalLoading('Building arena...', 'Preparing scene and track geometry...');
         this.state = 'racing';
+        this.audio.setAppState('racing');
         this.container.innerHTML = '';
         this.game = new Game(
           this.container,
@@ -611,6 +1464,7 @@ class ChainDuel3DApp {
           SPONSOR_LOGO_URLS,
           this.gameMode,
           this.localActiveSlots,
+          this.audio,
           this.onRaceFinished.bind(this),
         );
         this.updateGlobalLoading('Preparing racers...', 'Finalizing physics and HUD...');
@@ -659,6 +1513,7 @@ class ChainDuel3DApp {
     const localSlot = room.members.find(m => m.memberId === this.onlineMemberId)?.slotIndex ?? -1;
     this.gameMode = room.settings.mode ?? 'classic';
     this.state = 'racing';
+    this.audio.setAppState('racing');
     this.onlineFinishHandled = false;
     this.container.innerHTML = '';
     this.game = new Game(
@@ -680,6 +1535,7 @@ class ChainDuel3DApp {
       SPONSOR_LOGO_URLS,
       this.gameMode,
       activeSlots,
+      this.audio,
       this.onRaceFinished.bind(this),
     );
     if (this.latestRoomSnapshot) {
@@ -698,6 +1554,7 @@ class ChainDuel3DApp {
       this.onlineFinishTransitionTimeoutId = null;
     }
     this.state = 'result';
+    this.audio.setAppState('result');
     this.lastRaceItemStats = this.game ? this.game.getItemStats() : [];
     if (this.game) {
       this.game.dispose();
@@ -720,7 +1577,14 @@ class ChainDuel3DApp {
           top3Names,
           data.amount,
           data.lnurl,
-          () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
+        () => {
+          this.audio.events.onUiClick('confirm');
+          if (isOnlineFlow) {
+            void this.returnOnlineToLobby();
+          } else {
+            this.showModeMenu();
+          }
+        },
           this.gameMode,
           this.lastRaceItemStats,
           this.playerNames,
@@ -746,7 +1610,14 @@ class ChainDuel3DApp {
         top3Names,
         payoutAmount,
         payoutLnurl,
-        () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
+        () => {
+          this.audio.events.onUiClick('confirm');
+          if (isOnlineFlow) {
+            void this.returnOnlineToLobby();
+          } else {
+            this.showModeMenu();
+          }
+        },
         this.gameMode,
         this.lastRaceItemStats,
         this.playerNames,
@@ -759,7 +1630,14 @@ class ChainDuel3DApp {
       top3Names,
       this.wagerAmount * 2 * (1 - GAME_CONFIG.REVENUE_SPLIT_PERCENT / 100),
       null,
-      () => (isOnlineFlow ? this.returnOnlineToLobby() : this.showModeMenu()),
+      () => {
+        this.audio.events.onUiClick('confirm');
+        if (isOnlineFlow) {
+          void this.returnOnlineToLobby();
+        } else {
+          this.showModeMenu();
+        }
+      },
       this.gameMode,
       this.lastRaceItemStats,
       this.playerNames,

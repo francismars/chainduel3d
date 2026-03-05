@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "cues": [
+    {
+      "id": "music_menu_loop",
+      "category": "music",
+      "loop": true,
+      "gainDb": -14,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/music_menu_loop.wav" }],
+      "synth": { "waveform": "triangle", "frequency": 164, "durationMs": 1500, "attackMs": 120, "releaseMs": 260 }
+    },
+    {
+      "id": "music_race_loop",
+      "category": "music",
+      "loop": true,
+      "gainDb": -12,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/music_race_loop.wav" }],
+      "synth": { "waveform": "sawtooth", "frequency": 196, "durationMs": 1300, "attackMs": 80, "releaseMs": 180 }
+    },
+    {
+      "id": "countdown_tick",
+      "category": "sfxGameplay",
+      "gainDb": -6,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/countdown_tick.wav" }],
+      "cooldownMs": 120,
+      "maxVoices": 2,
+      "frequencyJitterPct": 1.2,
+      "gainJitterDb": 0.5,
+      "synth": { "waveform": "square", "frequency": 880, "durationMs": 120, "attackMs": 4, "releaseMs": 50 }
+    },
+    {
+      "id": "countdown_go",
+      "category": "sfxGameplay",
+      "gainDb": -4,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/countdown_go.wav" }],
+      "synth": { "waveform": "triangle", "frequency": 520, "durationMs": 240, "attackMs": 8, "releaseMs": 120 }
+    },
+    {
+      "id": "item_pickup",
+      "category": "sfxGameplay",
+      "gainDb": -7,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/item_pickup.wav" }],
+      "cooldownMs": 80,
+      "maxVoices": 4,
+      "frequencyJitterPct": 2.8,
+      "durationJitterMs": 18,
+      "gainJitterDb": 0.9,
+      "synth": { "waveform": "triangle", "frequency": 760, "durationMs": 140, "attackMs": 6, "releaseMs": 80 }
+    },
+    {
+      "id": "item_use",
+      "category": "sfxGameplay",
+      "gainDb": -7.5,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/item_use.wav" }],
+      "cooldownMs": 80,
+      "maxVoices": 6,
+      "frequencyJitterPct": 3.2,
+      "durationJitterMs": 24,
+      "gainJitterDb": 1.1,
+      "synth": { "waveform": "square", "frequency": 460, "durationMs": 160, "attackMs": 5, "releaseMs": 80 }
+    },
+    {
+      "id": "impact_hit",
+      "category": "sfxGameplay",
+      "gainDb": -7,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/impact_hit.wav" }],
+      "cooldownMs": 60,
+      "maxVoices": 6,
+      "frequencyJitterPct": 4,
+      "durationJitterMs": 30,
+      "gainJitterDb": 1.3,
+      "synth": { "waveform": "sawtooth", "frequency": 220, "durationMs": 170, "attackMs": 3, "releaseMs": 90 }
+    },
+    {
+      "id": "chain_steal_hit",
+      "category": "sfxGameplay",
+      "gainDb": -7.5,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/chain_steal_hit.wav" }],
+      "cooldownMs": 80,
+      "maxVoices": 4,
+      "frequencyJitterPct": 3.2,
+      "durationJitterMs": 26,
+      "gainJitterDb": 1,
+      "synth": { "waveform": "square", "frequency": 280, "durationMs": 190, "attackMs": 3, "releaseMs": 110 }
+    },
+    {
+      "id": "lap_pass",
+      "category": "sfxGameplay",
+      "gainDb": -7,
+      "preloadTier": "standard",
+      "variants": [{ "src": "/audio/lap_pass.wav" }],
+      "cooldownMs": 120,
+      "maxVoices": 2,
+      "frequencyJitterPct": 1.5,
+      "gainJitterDb": 0.4,
+      "synth": { "waveform": "triangle", "frequency": 620, "durationMs": 150, "attackMs": 4, "releaseMs": 80 }
+    },
+    {
+      "id": "final_lap_alert",
+      "category": "sfxGameplay",
+      "gainDb": -4,
+      "preloadTier": "standard",
+      "variants": [{ "src": "/audio/final_lap_alert.wav" }],
+      "cooldownMs": 300,
+      "maxVoices": 1,
+      "synth": { "waveform": "square", "frequency": 510, "durationMs": 260, "attackMs": 5, "releaseMs": 120 }
+    },
+    {
+      "id": "finish_stinger",
+      "category": "sfxGameplay",
+      "gainDb": -5,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/finish_stinger.wav" }],
+      "synth": { "waveform": "triangle", "frequency": 720, "durationMs": 420, "attackMs": 6, "releaseMs": 220 }
+    },
+    {
+      "id": "win_stinger",
+      "category": "sfxGameplay",
+      "gainDb": -4.5,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/win_stinger.wav" }],
+      "synth": { "waveform": "triangle", "frequency": 940, "durationMs": 560, "attackMs": 8, "releaseMs": 240 }
+    },
+    {
+      "id": "loss_stinger",
+      "category": "sfxGameplay",
+      "gainDb": -5.5,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/loss_stinger.wav" }],
+      "synth": { "waveform": "sawtooth", "frequency": 180, "durationMs": 520, "attackMs": 5, "releaseMs": 280 }
+    },
+    {
+      "id": "ui_hover",
+      "category": "sfxUi",
+      "gainDb": -21,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/ui_hover.wav" }],
+      "cooldownMs": 40,
+      "maxVoices": 2,
+      "frequencyJitterPct": 1.8,
+      "synth": { "waveform": "sine", "frequency": 740, "durationMs": 60, "attackMs": 2, "releaseMs": 22 }
+    },
+    {
+      "id": "ui_click",
+      "category": "sfxUi",
+      "gainDb": -15,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/ui_click.wav" }],
+      "cooldownMs": 50,
+      "maxVoices": 3,
+      "frequencyJitterPct": 1.8,
+      "gainJitterDb": 0.4,
+      "synth": { "waveform": "square", "frequency": 680, "durationMs": 90, "attackMs": 2, "releaseMs": 45 }
+    },
+    {
+      "id": "ui_back",
+      "category": "sfxUi",
+      "gainDb": -15,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/ui_back.wav" }],
+      "cooldownMs": 50,
+      "maxVoices": 2,
+      "frequencyJitterPct": 1.5,
+      "synth": { "waveform": "triangle", "frequency": 430, "durationMs": 90, "attackMs": 2, "releaseMs": 50 }
+    },
+    {
+      "id": "ui_confirm",
+      "category": "sfxUi",
+      "gainDb": -13,
+      "preloadTier": "critical",
+      "variants": [{ "src": "/audio/ui_confirm.wav" }],
+      "cooldownMs": 50,
+      "maxVoices": 3,
+      "frequencyJitterPct": 1.5,
+      "gainJitterDb": 0.5,
+      "synth": { "waveform": "triangle", "frequency": 860, "durationMs": 95, "attackMs": 2, "releaseMs": 50 }
+    }
+  ]
+}
