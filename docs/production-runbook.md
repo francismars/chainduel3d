@@ -127,6 +127,7 @@ npm run test:ws --workspace=server
    - session create/result still work without `x-idempotency-key` header
 10. Complete [staging release checklist](./staging-release-checklist.md).
 11. Record promotion decision using [go/no-go template](./go-no-go-template.md).
+12. Complete [audio release checklist](./audio-release-checklist.md), including mobile autoplay unlock validation.
 
 ## 7) Updating an Existing Deployment
 
